@@ -1,4 +1,13 @@
-# .gitignore 파일 내용
+# 빌드 산출물
 build/
 dist/
 *.exe
+
+# 커밋하지 않는 문서
+CLAUDE.md
+docs/DESIGN.md
+
+# 파이썬 환경·캐시
+.venv/
+__pycache__/
+.pytest_cache/
