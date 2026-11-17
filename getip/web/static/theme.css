@@ -1,0 +1,28 @@
+/* 테마 색상 변수 (설계 4.9절). 화면 코드는 색상값을 직접 쓰지 않고 이 변수만 쓴다.
+   light-dark(라이트값, 다크값) 한 줄이 두 벌을 겸한다: color-scheme이 light면 앞, dark면 뒤 값이 쓰인다. */
+
+/* system: OS 설정(prefers-color-scheme)에 따라 자동 선택 */
+:root {
+  color-scheme: light dark;
+
+  --bg: light-dark(#f6f7f9, #15181d);            /* 화면 바탕 (config.WINDOW_BG와 같은 값) */
+  --panel: light-dark(#ffffff, #1d2127);         /* 패널 바탕 */
+  --panel-alt: light-dark(#eef0f3, #252a31);     /* 선택·마우스 올림 바탕 */
+  --text: light-dark(#1d2127, #e4e7eb);          /* 본문 글자 */
+  --muted: light-dark(#6b7380, #8d96a3);         /* 보조 글자 */
+  --border: light-dark(#d9dde3, #333a43);        /* 테두리 */
+  --accent: light-dark(#2563eb, #5b9bff);        /* 강조 (주 버튼, 선택) */
+  --accent-text: light-dark(#ffffff, #0d1117);   /* 강조 바탕 위 글자 */
+  --danger: light-dark(#c62828, #ff6b6b);        /* 삭제·오류 */
+  --warn: light-dark(#a15c00, #f0b44c);          /* 경고 글자 */
+  --warn-bg: light-dark(#fff4e0, #3a2e14);       /* 경고 바탕 */
+
+  --map-bg: light-dark(#e9ecef, #1b1f24);        /* 타일이 없을 때 지도 바탕 */
+  --marker-target: light-dark(#e5484d, #ff6369); /* 조회 대상 마커 */
+  --marker-me: light-dark(#2563eb, #5b9bff);     /* 내 위치 마커 */
+  --route: light-dark(#6b7380, #9aa4b2);         /* 내 위치 ↔ 대상 연결선 */
+}
+
+/* 사용자가 직접 고른 테마는 OS 설정과 무관하게 고정 */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }

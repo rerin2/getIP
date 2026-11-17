@@ -1,0 +1,82 @@
+<!doctype html>
+<!-- data-theme는 서버가 저장된 테마(system/light/dark)로 채운다: 첫 화면 깜빡임 방지 -->
+<html lang="ko" data-theme="__THEME__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- 실행마다 바뀌는 API 토큰. api.js가 읽어 요청 헤더에 싣는다 -->
+  <meta name="getip-token" content="__TOKEN__">
+  <title>getIP</title>
+  <link rel="stylesheet" href="/static/leaflet/leaflet.css">
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <!-- 상단 바: 입력과 주요 버튼 -->
+  <header class="topbar">
+    <input id="target" type="text" placeholder="도메인, URL 또는 IP 입력" autocomplete="off" spellcheck="false" maxlength="2048">
+    <button id="btn-lookup" class="primary" type="button">조회</button>
+    <button id="btn-me" type="button">내 IP</button>
+    <span class="spacer"></span>
+    <button id="btn-theme" type="button" title="테마 전환"></button>
+    <button id="btn-settings" type="button">설정</button>
+  </header>
+
+  <main class="layout">
+    <!-- 왼쪽: 조회 기록 -->
+    <aside class="side">
+      <div class="side-head">
+        <strong>기록</strong>
+        <span id="history-count" class="muted"></span>
+      </div>
+      <input id="history-search" type="search" placeholder="기록 검색 (입력·호스트·IP)" autocomplete="off">
+      <ul id="history-list" class="history"></ul>
+      <button id="btn-clear" type="button" class="danger">전체 삭제</button>
+    </aside>
+
+    <!-- 가운데: 지도 + 안내 -->
+    <section class="map-wrap">
+      <div id="map"></div>
+      <div id="map-notice" class="map-notice" hidden></div>
+    </section>
+
+    <!-- 아래: 상세 정보 -->
+    <section class="detail">
+      <div id="status" class="status" role="status"></div>
+      <div id="detail-body" class="detail-body">
+        <p class="muted">도메인이나 IP를 입력하고 조회하세요.</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- 설정 대화상자 -->
+  <dialog id="settings-dialog">
+    <h2>설정</h2>
+    <label class="field">
+      <span>테마</span>
+      <select id="set-theme">
+        <option value="system">시스템 설정 따름</option>
+        <option value="light">라이트</option>
+        <option value="dark">다크</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>CARTO 지도 키</span>
+      <input id="set-key" type="password" autocomplete="off" spellcheck="false" placeholder="키를 붙여넣으세요">
+    </label>
+    <p id="set-key-state" class="muted small"></p>
+    <p class="muted small">키는 이 PC의 기록 DB(%APPDATA%\getIP)에만 저장됩니다.</p>
+    <p id="set-error" class="error small"></p>
+    <div class="dialog-buttons">
+      <button id="set-key-delete" type="button" class="danger">키 삭제</button>
+      <span class="spacer"></span>
+      <button id="set-cancel" type="button">취소</button>
+      <button id="set-save" type="button" class="primary">저장</button>
+    </div>
+  </dialog>
+
+  <!-- Leaflet은 전역 L을 만드는 일반 스크립트, 화면 코드는 모듈 -->
+  <script src="/static/leaflet/leaflet.js"></script>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

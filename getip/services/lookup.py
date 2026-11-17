@@ -72,14 +72,23 @@ class LookupService:
             return None  # 정보 없음
 
 
-def create_default(db_file: Optional[Path] = None) -> LookupService:
-    """기본 구성(ip-api + 사용자 폴더의 DB)으로 서비스를 만든다."""
-    warning = None  # 저장소 문제 안내 문구
+def open_database(db_file: Optional[Path] = None) -> Tuple[Database, Optional[str]]:
+    """기본 DB를 연다. 열 수 없으면 임시 DB와 안내 문구를 돌려준다."""
     try:
-        database = Database(db_file)  # 기본 위치에 DB 열기
+        return Database(db_file), None  # 기본 위치에 DB 열기
     except (sqlite3.Error, OSError) as exc:  # 폴더를 만들 수 없거나 파일이 손상된 경우
         fallback = Path(tempfile.mkdtemp(prefix="getip-")) / "getip.db"  # 임시 폴더에 새 DB
-        database = Database(fallback)  # 조회 기능은 계속 쓸 수 있게 함
         warning = f"기록 저장소를 열 수 없어 임시 저장소를 사용합니다. 이번 실행의 기록은 보존되지 않습니다. ({exc})"  # 화면 안내용
+        return Database(fallback), warning  # 조회 기능은 계속 쓸 수 있게 함
+
+
+def create_service(database: Database, warning: Optional[str] = None) -> LookupService:
+    """열린 DB로 기본 구성(ip-api + 캐시 + 기록) 서비스를 만든다. GUI는 같은 DB를 설정 저장에도 쓴다."""
     cache = GeoCacheStore(database, config.GEO_CACHE_DAYS)  # 위치 캐시
     return LookupService(CachedGeo(ip_api, cache), HistoryStore(database), storage_warning=warning)  # 서비스 조립
+
+
+def create_default(db_file: Optional[Path] = None) -> LookupService:
+    """기본 구성(ip-api + 사용자 폴더의 DB)으로 서비스를 만든다."""
+    database, warning = open_database(db_file)  # DB 열기 (실패 시 임시 DB)
+    return create_service(database, warning)  # 서비스 조립
