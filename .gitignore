@@ -7,6 +7,10 @@ dist/
 CLAUDE.md
 docs/DESIGN.md
 
+# 기록 DB (CARTO 키 포함). 기본 위치는 %APPDATA%\getIP라 저장소 밖이지만, GETIP_DATA_DIR을 프로젝트 안으로 지정했을 때를 대비
+*.db
+*.db-journal
+
 # 파이썬 환경·캐시
 .venv/
 __pycache__/
