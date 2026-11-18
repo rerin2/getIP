@@ -3,7 +3,7 @@
 from dataclasses import asdict  # 데이터 클래스 → dict
 from typing import Any, Dict  # 타입 표기
 
-from getip.models import GeoInfo, HistoryEntry, LookupResult, result_to_dict  # 데이터 클래스와 변환 함수
+from getip.models import ConnectionSnapshot, GeoInfo, HistoryEntry, LookupResult, result_to_dict  # 데이터 클래스와 변환 함수
 
 
 def result_json(result: LookupResult) -> Dict[str, Any]:
@@ -23,3 +23,10 @@ def history_json(entry: HistoryEntry) -> Dict[str, Any]:
     data = asdict(entry)  # 요약 필드
     data["created_at"] = entry.created_at.isoformat()  # 시각은 ISO 문자열로
     return data  # 목록 항목
+
+
+def snapshot_json(snapshot: ConnectionSnapshot) -> Dict[str, Any]:
+    """프로그램 연결 수집 결과 전체."""
+    data = asdict(snapshot)  # 프로그램 → 연결 → 위치까지 중첩 변환
+    data["collected_at"] = snapshot.collected_at.isoformat()  # 시각은 ISO 문자열로
+    return data  # JSON 응답 본문

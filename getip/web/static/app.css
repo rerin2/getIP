@@ -65,7 +65,29 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
   border-right: 1px solid var(--border);
   min-height: 0;
 }
-.side-head { display: flex; justify-content: space-between; align-items: baseline; }
+/* 탭 */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.tab { border: none; border-radius: 6px 6px 0 0; background: none; padding: 6px 10px; color: var(--muted); }
+.tab.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.panel { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.panel[hidden] { display: none; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.check { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.check input { padding: 0; margin: 0; }
+
+/* 프로그램 연결 목록 */
+.conn-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+.conn-list .prog { display: flex; width: 100%; gap: 6px; align-items: baseline; border: none; background: none; padding: 5px 6px; text-align: left; }
+.conn-list .prog:hover { background: var(--panel-alt); }
+.conn-list .prog .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.conn-list .prog .caret { width: 1em; color: var(--muted); }
+.conn-list li.selected > .prog { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
+.conn-list ul { list-style: none; margin: 0 0 4px; padding: 0 0 0 20px; }
+.conn-list .conn { display: flex; width: 100%; gap: 8px; border: none; background: none; padding: 3px 6px; text-align: left; font-size: 12px; }
+.conn-list .conn:hover, .conn-list .conn.selected { background: var(--panel-alt); }
+.conn-list .conn .addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, monospace; }
+.conn-list .conn.closed .addr { text-decoration: line-through; color: var(--muted); }
+.conn-list .empty { color: var(--muted); padding: 8px; }
 .history { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
 .history li { display: flex; align-items: stretch; border-radius: 6px; }
 .history li.selected { background: var(--panel-alt); box-shadow: inset 3px 0 0 var(--accent); }
@@ -105,6 +127,22 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .mk-target { stroke: var(--marker-target); fill: var(--marker-target); fill-opacity: .55; stroke-width: 2; }
 .mk-me { stroke: var(--marker-me); fill: var(--marker-me); fill-opacity: .55; stroke-width: 2; }
 .mk-route { stroke: var(--route); fill: none; stroke-width: 1.5; stroke-dasharray: 6 6; }
+.mk-conn { stroke: var(--marker-conn); fill: var(--marker-conn); fill-opacity: .5; stroke-width: 1.5; }
+.mk-conn.dim { stroke-opacity: .25; fill-opacity: .12; }
+.mk-conn.hot { stroke: var(--marker-target); fill: var(--marker-target); fill-opacity: .7; }
+/* 같은 좌표의 연결 수 배지 (divIcon) */
+.mk-count {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--marker-conn);
+  color: var(--accent-text);
+  border: 2px solid var(--panel);
+}
+.mk-count.dim { opacity: .3; }
+.mk-count.hot { background: var(--marker-target); }
 
 /* Leaflet 기본 부품을 테마에 맞춤 */
 .leaflet-container { font: inherit; }
@@ -161,3 +199,7 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; }
   .side { border-right: none; border-bottom: 1px solid var(--border); }
   .detail-grid { grid-template-columns: max-content 1fr; }
 }
+
+/* 지도에서 고른 좌표의 연결 목록 */
+.spot-list { margin: 4px 0; padding-left: 18px; columns: 2 320px; }
+.spot-list li { break-inside: avoid; }

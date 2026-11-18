@@ -78,3 +78,64 @@ export function renderDetail(el, result, { onPickIp }) {
 
   el.replaceChildren(...parts); // 패널 교체
 }
+
+// "상세 조회" 버튼 (일반 조회를 실행하고 기록에 남김)
+function lookupButton(ip, onLookup) {
+  const btn = document.createElement('button'); // 버튼
+  btn.type = 'button'; // 폼 전송 아님
+  btn.className = 'primary'; // 주 버튼 모양
+  btn.textContent = '상세 조회'; // 글자
+  btn.title = `${ip}를 조회하고 기록에 남깁니다`; // 설명
+  btn.addEventListener('click', () => onLookup(ip)); // 실행
+  return btn; // 완성
+}
+
+// 연결 하나의 상세. program: 묶음, conn: 연결, onLookup(ip): 상세 조회
+export function renderConnectionDetail(el, program, conn, { onLookup }) {
+  const geo = conn.geo || {}; // 위치 (없으면 빈 객체)
+  const dl = document.createElement('dl'); // 표
+  dl.className = 'detail-grid'; // 배치
+  addRow(dl, '프로그램', program.name); // 이름
+  addRow(dl, 'PID', conn.pid); // 프로세스 ID
+  addRow(dl, '경로', program.exe_path); // 실행 파일
+  addRow(dl, '상태', conn.closed ? '종료됨 (이전 수집 이후 사라짐)' : conn.status); // 연결 상태
+  addRow(dl, '원격 주소', `${conn.remote_ip}:${conn.remote_port}`); // 상대
+  addRow(dl, '로컬 포트', conn.local_port); // 내 쪽
+  addRow(dl, '국가', geo.country ? `${geo.country}${geo.country_code ? ` (${geo.country_code})` : ''}` : (conn.is_public ? null : '사설망')); // 국가
+  addRow(dl, '도시', geo.city); // 도시
+  addRow(dl, 'ISP', geo.isp); // 사업자
+  addRow(dl, '조직', geo.org); // 조직
+  addRow(dl, 'ASN', geo.asn); // AS 번호
+  addRow(dl, '호스팅', geo.is_hosting == null ? null : geo.is_hosting ? '예 (데이터센터 대역)' : '아니오'); // 데이터센터 여부
+
+  const parts = [dl]; // 패널 내용
+  if (conn.is_public) parts.push(lookupButton(conn.remote_ip, onLookup)); // 공인 IP만 상세 조회 가능
+  const note = document.createElement('p'); // 안내
+  note.className = 'note'; // 작은 글자
+  note.textContent = '목록의 위치는 DB 조회만 한 값입니다. [상세 조회]를 누르면 역방향 DNS 등 일반 조회를 실행하고 기록에 남깁니다.'; // 안내 문구
+  parts.push(note); // 추가
+  el.replaceChildren(...parts); // 패널 교체
+}
+
+// 지도에서 좌표 묶음을 누른 경우: 그곳의 연결 목록. spot: {items:[{program, conn}]}, onPick(program, conn)
+export function renderSpotDetail(el, spot, { onPick }) {
+  const geo = spot.items[0].conn.geo || {}; // 대표 위치
+  const head = document.createElement('p'); // 제목 줄
+  head.textContent = `${[geo.city, geo.country].filter(Boolean).join(', ') || '위치'} — 연결 ${spot.items.length}개`; // 위치와 개수
+  const ul = document.createElement('ul'); // 목록
+  ul.className = 'spot-list'; // 모양
+  for (const { program, conn } of spot.items) {
+    const li = document.createElement('li'); // 한 줄
+    const btn = document.createElement('button'); // 누르면 그 연결 상세
+    btn.type = 'button'; // 폼 전송 아님
+    btn.className = 'link'; // 링크 모양
+    btn.textContent = `${program.name} → ${conn.remote_ip}:${conn.remote_port}`; // 프로그램과 주소
+    btn.addEventListener('click', () => onPick(program, conn)); // 선택
+    const isp = document.createElement('span'); // 사업자
+    isp.className = 'muted'; // 흐린 글자
+    isp.textContent = conn.geo && conn.geo.isp ? ` ${conn.geo.isp}` : ''; // 있을 때만
+    li.append(btn, isp); // 조립
+    ul.append(li); // 추가
+  }
+  el.replaceChildren(head, ul); // 패널 교체
+}

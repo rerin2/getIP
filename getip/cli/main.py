@@ -3,11 +3,13 @@
 from typing import Dict, List, Optional  # 타입 표기
 
 from getip import config  # 홉 수·목록 건수 설정
+from getip.cli.connections_view import handle_connections  # 프로그램 연결 표
 from getip.cli.history_view import handle_history  # 기록 보기 화면
 from getip.geo.base import GeoLookupError  # 위치 조회 실패 예외
 from getip.models import GeoInfo, Hop, LookupResult  # 결과 데이터 클래스
 from getip.net import target  # 입력 형식 오류 예외
 from getip.probe import traceroute  # 경로 추적
+from getip.services.connections import ConnectionService  # 프로그램 연결 조회
 from getip.services.lookup import LookupService, create_default  # 조회 서비스
 
 _RESULT_LINE = "-" * 35  # 조회 결과 구분선
@@ -161,13 +163,15 @@ def main(service: Optional[LookupService] = None) -> None:
     print("- 'm' 입력: 현재 기기의 공인 IP 조회")  # 사용법 2
     print("- 't' 입력: 라우팅 추적 (Traceroute) 실행")  # 사용법 3
     print("- 'h' 입력: 조회 기록 보기")  # 사용법 4
-    print("- 'q' 입력: 프로그램 종료")  # 사용법 5
+    print("- 'c' 입력: 이 PC의 프로그램별 연결 보기")  # 사용법 5
+    print("- 'q' 입력: 프로그램 종료")  # 사용법 6
     if service.storage_warning:  # 기록 저장소에 문제가 있으면
         print(f"[!] {service.storage_warning}")  # 시작할 때 알림
+    connections = ConnectionService(service.geo)  # 연결 조회 (위치 캐시 공유, 실행 중 종료된 연결을 기억)
 
     while True:  # 종료 명령 전까지 반복
         try:
-            text = input("\n[입력 대기] 도메인/URL, m(내 IP), t(라우팅 추적), h(기록), q(종료) : ").strip()  # 명령 입력
+            text = input("\n[입력 대기] 도메인/URL, m(내 IP), t(라우팅 추적), h(기록), c(연결), q(종료) : ").strip()  # 명령 입력
             command = text.lower()  # 대소문자 구분 없이 비교
             if command in ("q", "exit"):  # 종료 명령
                 print("프로그램을 종료합니다.")  # 종료 안내
@@ -178,6 +182,8 @@ def main(service: Optional[LookupService] = None) -> None:
                 handle_my_ip(service)  # 실행
             elif command == "t":  # 경로 추적
                 handle_trace(service)  # 실행
+            elif command == "c":  # 프로그램 연결 보기
+                handle_connections(connections)  # 실행
             elif command == "h":  # 기록 보기
                 handle_history(service.history, print_result=lambda r: print_lines(format_result(r)))  # 실행
             else:  # 그 외는 조회 대상으로 간주

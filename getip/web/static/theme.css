@@ -21,6 +21,7 @@
   --marker-target: light-dark(#e5484d, #ff6369); /* 조회 대상 마커 */
   --marker-me: light-dark(#2563eb, #5b9bff);     /* 내 위치 마커 */
   --route: light-dark(#6b7380, #9aa4b2);         /* 내 위치 ↔ 대상 연결선 */
+  --marker-conn: light-dark(#0f8a6a, #3dd6a8);   /* 프로그램 연결 마커 */
 }
 
 /* 사용자가 직접 고른 테마는 OS 설정과 무관하게 고정 */

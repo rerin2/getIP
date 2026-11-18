@@ -68,3 +68,13 @@ def test_normalize_idn_to_punycode():
 def test_normalize_rejects_invalid(text):
     with pytest.raises(InvalidTargetError):  # 형식 오류 예외가 나야 함
         normalize(text)  # 정리 실행
+
+
+@pytest.mark.parametrize("raw, host", [
+    ("2606:4700:4700::1111", "2606:4700:4700::1111"),  # 대괄호 없는 IPv6 (연결 목록에서 넘어오는 형태)
+    ("2001:DB8::1", "2001:db8::1"),  # 대문자 → 표준 표기
+    ("[2001:db8::1]:443", "2001:db8::1"),  # URL식 표기
+])
+def test_ipv6_literal(raw, host):
+    target = normalize(raw)  # 정리
+    assert target.host == host and target.is_ip  # IP로 인식

@@ -30,6 +30,10 @@ TILE_ATTRIBUTION = (
 TILE_KEY_ENV = "GETIP_CARTO_KEY"  # 이 환경 변수가 있으면 저장된 키보다 우선 사용 (개발용)
 TILE_ORIGIN = "https://basemaps.cartocdn.com"  # 화면 보안 정책(CSP)에서 이미지 출처로 허용할 주소
 
+CONN_REFRESH_SEC = 5  # 프로그램 연결 자동 새로고침 주기(초, D10)
+CONN_CLOSED_KEEP_SEC = 600  # 사라진 연결을 '종료됨'으로 남겨 두는 시간(초). 자동 새로고침을 오래 켜 둬도 목록이 끝없이 늘지 않게 함
+CONN_GEO_RETRY_SEC = 60  # 일괄 위치 조회가 실패(한도 초과 등)한 뒤 다시 외부 조회를 시도하기까지 기다리는 시간(초)
+
 THEMES = ("system", "light", "dark")  # 고를 수 있는 테마 (system = OS 설정 따름)
 DEFAULT_THEME = "system"  # 처음 실행 시 테마
 

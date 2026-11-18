@@ -16,8 +16,10 @@ from pydantic import BaseModel, Field  # 요청 본문 검증
 from getip import config  # 타일 주소, 테마 목록
 from getip.geo.base import GeoLookupError  # 위치 조회 실패 예외
 from getip.net.target import InvalidTargetError  # 입력 형식 오류
+from getip.services.connections import ConnectionService  # 프로그램 연결 조회
 from getip.services.lookup import LookupService  # 조회 서비스
 from getip.storage.settings import InvalidSettingError, SettingsStore  # 화면 설정
+from getip.system.connections import ConnectionsUnavailableError  # 연결 목록 읽기 실패
 from getip.web import serialize  # JSON 변환
 from getip.web.security import make_guard  # 로컬 서버 보호 미들웨어
 
@@ -62,8 +64,13 @@ def _tile_urls(settings: SettingsStore) -> Optional[dict]:
     return {"light": config.TILE_URL_LIGHT + suffix, "dark": config.TILE_URL_DARK + suffix}  # 테마별 주소
 
 
-def create_app(service: LookupService, settings: SettingsStore, token: str) -> FastAPI:
-    """서비스와 설정 저장소를 연결한 앱을 만든다. token은 실행마다 새로 만든 임의 문자열."""
+def create_app(service: LookupService, settings: SettingsStore, token: str,
+               connections: Optional[ConnectionService] = None) -> FastAPI:
+    """서비스와 설정 저장소를 연결한 앱을 만든다. token은 실행마다 새로 만든 임의 문자열.
+
+    connections가 없으면 위치 조회 서비스의 캐시를 그대로 써서 기본 연결 서비스를 만든다.
+    """
+    connections = connections or ConnectionService(service.geo)  # 같은 위치 캐시 공유
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)  # 문서 화면은 끔 (로컬 전용 앱)
     app.middleware("http")(make_guard(token))  # 모든 요청에 Host·Origin·토큰 검사
     index_template = (STATIC_DIR / "index.html").read_text(encoding="utf-8")  # 화면 틀 (실행 중 바뀌지 않음)
@@ -105,6 +112,14 @@ def create_app(service: LookupService, settings: SettingsStore, token: str) -> F
         except GeoLookupError as exc:  # 네트워크 오류, 한도 초과
             raise HTTPException(502, str(exc)) from exc  # 외부 서비스 실패
 
+    @app.get("/api/connections")
+    def connections_list(include_private: bool = False, include_closing: bool = False):
+        """이 PC의 프로그램별 TCP 연결과 위치 (한 번 수집). 기록에는 저장하지 않는다 (D9)."""
+        try:
+            return serialize.snapshot_json(connections.snapshot(include_private, include_closing))  # 수집 + 위치 + 묶기
+        except ConnectionsUnavailableError as exc:  # 권한 등으로 읽기 실패
+            raise HTTPException(503, str(exc)) from exc  # 사유 전달
+
     @app.get("/api/history")
     def history_list(q: str = "", limit: int = Query(50, ge=1, le=_HISTORY_MAX_LIMIT), offset: int = Query(0, ge=0)):
         """기록 목록 (최신순, 검색 가능)."""
@@ -142,6 +157,7 @@ def create_app(service: LookupService, settings: SettingsStore, token: str) -> F
             "tiles": _tile_urls(settings),  # 테마별 타일 주소 또는 None
             "attribution": config.TILE_ATTRIBUTION,  # 출처 표기
             "storage_warning": service.storage_warning,  # 기록 저장소 문제 안내 (없으면 None)
+            "connections_refresh_sec": config.CONN_REFRESH_SEC,  # 연결 목록 자동 새로고침 주기
         }
 
     @app.put("/api/settings")

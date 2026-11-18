@@ -69,8 +69,12 @@ class CachedGeo:
         self._cache_put([info])  # 결과 저장
         return info  # 조회 결과
 
-    def lookup_many(self, ips: Iterable[str], timeout: float = config.GEO_TIMEOUT_SEC) -> BatchResult:
-        """여러 IP를 조회한다. 캐시에 없는 공인 IP만 모아 한 번에 요청한다. 예외를 던지지 않는다."""
+    def lookup_many(self, ips: Iterable[str], timeout: float = config.GEO_TIMEOUT_SEC,
+                    fetch: bool = True) -> BatchResult:
+        """여러 IP를 조회한다. 캐시에 없는 공인 IP만 모아 한 번에 요청한다. 예외를 던지지 않는다.
+
+        fetch=False면 캐시만 보고, 없는 IP는 pending으로 돌려준다 (한도 초과 후 대기 중일 때).
+        """
         unique = list(dict.fromkeys(ips))  # 순서를 유지하며 중복 제거
         result = BatchResult()  # 결과 묶음
         public = [ip for ip in unique if is_public_ip(ip)]  # 조회 대상
@@ -79,6 +83,9 @@ class CachedGeo:
         missing = [ip for ip in public if ip not in result.found]  # 새로 조회할 IP
         if not missing:  # 전부 캐시에 있으면
             return result  # API 호출 없음
+        if not fetch:  # 외부 호출 금지
+            result.pending = missing  # 나중에 조회할 목록
+            return result  # 캐시 결과만
         try:
             fetched = self._provider.lookup_batch(missing, timeout)  # 일괄 조회
         except GeoLookupError as exc:  # 한도 초과·네트워크 오류

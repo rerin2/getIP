@@ -20,6 +20,9 @@ def normalize(user_input: str) -> Target:
     if not raw:  # 빈 입력이면
         raise InvalidTargetError("입력이 비어 있습니다.")  # 조회 불가
 
+    if _is_ip(raw):  # 대괄호 없는 IPv6("2606:4700::1111")는 URL로 해석하면 콜론이 포트로 잘리므로 먼저 확인
+        return Target(raw=raw, host=str(ipaddress.ip_address(raw)), is_ip=True)  # 표준 표기로 정리해 반환
+
     url = raw if "://" in raw else "http://" + raw  # 스킴이 없으면 붙여서 urlparse가 호스트를 인식하게 함
     try:
         host = urlparse(url).hostname  # 포트·계정·경로를 뺀 호스트만 추출 (소문자로 반환됨)

@@ -1,7 +1,8 @@
 // 화면 진입점: 부품(지도, 기록, 상세, 테마, 설정)을 연결한다.
 
 import { api } from './api.js'; // 로컬 API
-import { renderDetail } from './detail.js'; // 상세 패널
+import { connKey, groupByLocation, programKey, renderConnections } from './connections.js'; // 프로그램 연결 목록
+import { renderConnectionDetail, renderDetail, renderSpotDetail } from './detail.js'; // 상세 패널
 import { renderHistory } from './history.js'; // 기록 목록
 import { GeoMap } from './map.js'; // 지도
 import { openSettings } from './settings.js'; // 설정 대화상자
@@ -18,11 +19,24 @@ const noticeEl = $('map-notice'); // 지도 위 안내
 const historyList = $('history-list'); // 기록 목록
 const historySearch = $('history-search'); // 기록 검색
 const historyCount = $('history-count'); // 기록 건수
+const connList = $('conn-list'); // 연결 목록
+const connCount = $('conn-count'); // 연결 수 (탭 글자)
+const connTime = $('conn-time'); // 마지막 수집 시각
+const connAuto = $('conn-auto'); // 자동 새로고침 체크
+const connPrivate = $('conn-private'); // 사설 IP 표시 체크
+const connClosing = $('conn-closing'); // 종료·종료 중 연결 표시 체크
+const connRefreshBtn = $('btn-conn-refresh'); // 새로고침 버튼
 
 const state = {
   settings: null, // /api/settings 응답
   selectedId: null, // 지금 보고 있는 기록 번호
   busy: false, // 조회 중 여부 (중복 클릭 방지)
+  tab: 'history', // 지금 보이는 왼쪽 탭
+  conn: null, // 마지막 /api/connections 응답
+  connBusy: false, // 수집 중 여부
+  connTimer: null, // 자동 새로고침 타이머
+  connUi: { expanded: new Set(), selectedProgram: null, selectedConn: null }, // 펼친 프로그램, 선택 상태 (새로고침해도 유지)
+  lastResult: null, // 기록 탭에서 마지막으로 본 조회 결과 (탭을 돌아오면 다시 표시)
 };
 
 let map = null; // GeoMap (설정을 읽은 뒤 생성)
@@ -67,6 +81,7 @@ async function loadHistory() {
 
 // 조회 결과 하나를 지도·상세에 표시
 function showResult(result) {
+  state.lastResult = result; // 탭 전환 후 다시 보여주기 위해 기억
   state.selectedId = result.id; // 강조할 기록
   renderDetail(detailEl, result, { onPickIp: runLookup }); // 상세 패널
   const shown = map.showResult(result); // 지도 마커
@@ -130,8 +145,113 @@ async function loadMe() {
   }
 }
 
+// --- 프로그램 연결 탭 ---
+
+// 목록·지도 다시 그리기 (수집 없이 선택 상태만 바뀐 경우에도 호출)
+function drawConnections() {
+  const snap = state.conn; // 마지막 수집 결과
+  if (!snap) return; // 아직 없음
+  renderConnections(connList, snap, state.connUi, { onToggleProgram: toggleProgram, onSelectConn: selectConn }); // 목록
+  map.highlightProgram(state.connUi.selectedProgram); // 지도 강조
+}
+
+// 프로그램 이름을 누르면 펼치기/접기 + 지도 강조
+function toggleProgram(program) {
+  const key = programKey(program); // 구분값
+  const ui = state.connUi; // 선택 상태
+  if (ui.expanded.has(key)) ui.expanded.delete(key); // 접기
+  else ui.expanded.add(key); // 펼치기
+  ui.selectedProgram = ui.selectedProgram === key && !ui.expanded.has(key) ? null : key; // 접으면서 같은 것이면 강조 해제
+  drawConnections(); // 다시 그리기
+}
+
+// 연결 하나를 고르면 상세 + 지도 이동
+function selectConn(program, conn) {
+  const ui = state.connUi; // 선택 상태
+  ui.selectedProgram = programKey(program); // 그 프로그램 강조
+  ui.expanded.add(ui.selectedProgram); // 펼쳐서 보이게
+  ui.selectedConn = connKey(conn); // 연결 강조
+  drawConnections(); // 다시 그리기
+  renderConnectionDetail(detailEl, program, conn, { onLookup: lookupFromConnection }); // 상세 패널
+  if (conn.geo && conn.geo.lat != null) map.focus(conn.geo.lat, conn.geo.lon); // 지도 이동
+}
+
+// 연결 상세에서 [상세 조회]: 기록 탭으로 넘어가 일반 조회 실행
+function lookupFromConnection(ip) {
+  switchTab('history'); // 결과는 기록 탭에서 봄
+  targetInput.value = ip; // 입력창에도 표시
+  runLookup(ip); // 조회 + 기록 저장
+}
+
+// 서버에서 연결을 한 번 수집
+async function refreshConnections() {
+  if (state.connBusy) return; // 이미 수집 중이면 건너뜀 (자동 새로고침이 겹치는 경우)
+  state.connBusy = true; // 시작
+  connRefreshBtn.disabled = true; // 중복 클릭 방지
+  try {
+    const query = `include_private=${connPrivate.checked}&include_closing=${connClosing.checked}`; // 표시 옵션
+    const snap = await api(`/api/connections?${query}`); // 수집 + 위치
+    state.conn = snap; // 기억
+    connCount.textContent = `${snap.shown}`; // 탭에 연결 수
+    connTime.textContent = new Date(snap.collected_at).toLocaleTimeString('ko-KR'); // 수집 시각
+    if (state.tab === 'conn') map.showConnections(groupByLocation(snap), programKey, showSpot); // 지도 마커
+    drawConnections(); // 목록
+    setStatus(snap.error ? `${snap.error} (위치 미조회 IP ${snap.pending.length}개)` : '', Boolean(snap.error)); // 위치 조회 문제 안내
+  } catch (e) {
+    setStatus(`연결 목록을 불러오지 못했습니다: ${e.message}`, true); // 실패 사유
+  } finally {
+    state.connBusy = false; // 끝
+    connRefreshBtn.disabled = false; // 버튼 복구
+  }
+}
+
+// 지도에서 좌표 묶음을 누름
+function showSpot(spot) {
+  if (spot.items.length === 1) selectConn(spot.items[0].program, spot.items[0].conn); // 하나면 바로 상세
+  else renderSpotDetail(detailEl, spot, { onPick: selectConn }); // 여러 개면 목록
+}
+
+// 자동 새로고침 켜기/끄기 (연결 탭이 보일 때만 동작)
+function updateAutoRefresh() {
+  clearInterval(state.connTimer); // 기존 타이머 정지
+  state.connTimer = null; // 비움
+  if (connAuto.checked && state.tab === 'conn') {
+    const sec = (state.settings && state.settings.connections_refresh_sec) || 5; // 서버 설정 주기
+    state.connTimer = setInterval(refreshConnections, sec * 1000); // 주기적으로 수집
+  }
+}
+
+// 왼쪽 탭 전환: 'history' | 'conn'
+function switchTab(name) {
+  if (state.tab === name) return; // 이미 그 탭
+  state.tab = name; // 기억
+  const isConn = name === 'conn'; // 연결 탭인지
+  $('tab-history').classList.toggle('active', !isConn); // 탭 강조
+  $('tab-conn').classList.toggle('active', isConn); // 탭 강조
+  $('tab-history').setAttribute('aria-selected', String(!isConn)); // 접근성
+  $('tab-conn').setAttribute('aria-selected', String(isConn)); // 접근성
+  $('panel-history').hidden = isConn; // 패널 전환
+  $('panel-conn').hidden = !isConn; // 패널 전환
+  map.setTargetVisible(!isConn); // 조회 대상 마커는 기록 탭에서만
+  if (isConn) {
+    detailEl.replaceChildren(); // 상세 비움 (연결을 고르면 채워짐)
+    refreshConnections(); // 탭을 열 때 수집 (설계: 열거나 새로고침할 때만)
+  } else {
+    map.clearConnections(); // 연결 마커 제거
+    if (state.lastResult) renderDetail(detailEl, state.lastResult, { onPickIp: runLookup }); // 보던 결과 복원
+    setStatus(''); // 연결 탭 안내 지움
+  }
+  updateAutoRefresh(); // 자동 새로고침은 연결 탭에서만
+}
+
 // 이벤트 연결
 function bindEvents() {
+  $('tab-history').addEventListener('click', () => switchTab('history')); // 기록 탭
+  $('tab-conn').addEventListener('click', () => switchTab('conn')); // 연결 탭
+  connRefreshBtn.addEventListener('click', refreshConnections); // 새로고침
+  connAuto.addEventListener('change', updateAutoRefresh); // 자동 새로고침 켜기/끄기
+  connPrivate.addEventListener('change', refreshConnections); // 옵션이 바뀌면 다시 수집
+  connClosing.addEventListener('change', refreshConnections); // 옵션이 바뀌면 다시 수집
   lookupBtn.addEventListener('click', () => runLookup(targetInput.value)); // 조회 버튼
   targetInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') runLookup(targetInput.value); // Enter로 조회

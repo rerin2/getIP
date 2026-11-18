@@ -69,6 +69,49 @@ class HistoryEntry:
     isp: Optional[str]  # 인터넷 사업자
 
 
+@dataclass  # 수집 후 위치·종료 여부를 채우므로 변경 가능
+class Connection:
+    """이 PC의 프로그램이 맺은 TCP 연결 한 건 (R7)."""
+
+    pid: Optional[int]  # 프로세스 ID, 소유 프로세스가 없으면(TIME_WAIT 등) None
+    process_name: Optional[str]  # 프로그램 이름, 읽지 못하면 None
+    exe_path: Optional[str]  # 실행 파일 경로, 읽지 못하면 None
+    local_port: int  # 이 PC 쪽 포트
+    remote_ip: str  # 상대 IP
+    remote_port: int  # 상대 포트
+    status: str  # "ESTABLISHED", "TIME_WAIT" 등
+    is_public: bool  # 공인 IP 여부 (False면 위치 조회 생략)
+    protocol: str = "tcp"  # 지금은 TCP만 수집 (설계 3.7절)
+    closed: bool = False  # 이전 수집에는 있었지만 지금은 없는 연결
+    geo: Optional[GeoInfo] = None  # 캐시·일괄 조회로 붙인 위치 정보
+
+    def key(self) -> tuple:
+        """같은 연결인지 비교할 때 쓰는 값. 종료된 연결을 찾는 데 쓴다."""
+        return (self.pid, self.local_port, self.remote_ip, self.remote_port)  # 프로세스 + 양 끝 주소
+
+
+@dataclass
+class ProgramConnections:
+    """프로그램 하나와 그 연결들."""
+
+    name: str  # 화면에 보일 프로그램 이름
+    exe_path: Optional[str]  # 실행 파일 경로
+    pids: List[int]  # 이 이름으로 묶인 프로세스 ID들
+    connections: List[Connection]  # 연결 목록
+
+
+@dataclass
+class ConnectionSnapshot:
+    """한 번 수집한 결과 전체."""
+
+    collected_at: datetime  # 수집 시각(UTC)
+    programs: List[ProgramConnections]  # 프로그램별 묶음 (연결 많은 순)
+    total: int  # 필터 전 원격 주소가 있는 연결 수
+    shown: int  # 화면에 보이는 연결 수
+    pending: List[str] = field(default_factory=list)  # 위치를 아직 조회하지 못한 IP
+    error: Optional[str] = None  # 위치 조회 실패 사유
+
+
 def _pick(cls, data: Dict[str, Any]) -> Dict[str, Any]:
     """dict에서 cls가 아는 필드만 골라낸다. 이후 버전에서 필드가 늘거나 줄어도 읽을 수 있게 한다."""
     names = {f.name for f in fields(cls)}  # 클래스에 정의된 필드 이름

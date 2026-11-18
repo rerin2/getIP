@@ -10,9 +10,9 @@ function tooltipContent(title, subtitle) {
   const head = document.createElement('strong'); // 제목 줄
   head.textContent = title; // 글자로만 넣음
   box.append(head); // 추가
-  if (subtitle) {
-    const sub = document.createElement('div'); // 보조 줄
-    sub.textContent = subtitle; // 글자로만 넣음
+  for (const line of (subtitle || '').split('\n').filter(Boolean)) {
+    const sub = document.createElement('div'); // 보조 줄 (여러 줄이면 줄마다)
+    sub.textContent = line; // 글자로만 넣음
     box.append(sub); // 추가
   }
   return box; // 완성된 요소
@@ -43,6 +43,8 @@ export class GeoMap {
     this.meLatLng = null; // 내 좌표
     this.target = null; // 조회 대상 마커
     this.route = null; // 연결선
+    this.connLayer = null; // 프로그램 연결 마커 묶음
+    this.connMarkers = []; // 강조 처리용 마커 정보
   }
 
   // 타일 주소를 바꾼다. null이면 타일 없이 바탕색만 보인다
@@ -95,6 +97,67 @@ export class GeoMap {
       this.map.setView(latlng, TARGET_ZOOM); // 대상으로 이동
     }
     return true; // 표시함
+  }
+
+  // 조회 대상 마커·선을 보이거나 숨긴다 (연결 탭에서는 숨김)
+  setTargetVisible(show) {
+    for (const layer of [this.target, this.route]) {
+      if (!layer) continue; // 없는 레이어
+      if (show) layer.addTo(this.map); // 다시 표시
+      else layer.remove(); // 숨김
+    }
+  }
+
+  // 프로그램 연결 마커. spots: [{lat, lon, items:[{program, conn}]}], keyOf(program): 강조용 구분값, onClick(spot)
+  showConnections(spots, keyOf, onClick) {
+    this.clearConnections(); // 이전 마커 제거
+    this.connLayer = L.layerGroup().addTo(this.map); // 연결 마커 묶음
+    this.connMarkers = []; // [{layer, keys:Set}] 강조 처리용
+    for (const spot of spots) {
+      const count = spot.items.length; // 이 좌표의 연결 수
+      const first = spot.items[0]; // 툴팁 제목용
+      const title = count > 1 ? `${count}개 연결` : `${first.program.name}`; // 제목
+      const lines = spot.items.slice(0, 8).map(({ program, conn }) => `${program.name} → ${conn.remote_ip}:${conn.remote_port}`); // 최대 8줄
+      if (count > 8) lines.push(`… 외 ${count - 8}개`); // 나머지 개수
+      const place = [first.conn.geo.city, first.conn.geo.country].filter(Boolean).join(', '); // 위치
+      let layer; // 마커
+      if (count === 1) {
+        layer = L.circleMarker([spot.lat, spot.lon], { radius: 6, className: 'mk-conn' }); // 작은 원
+      } else {
+        const badge = document.createElement('div'); // 개수 배지
+        badge.textContent = String(count); // 숫자
+        const size = count >= 10 ? 26 : 22; // 두 자리면 조금 크게
+        layer = L.marker([spot.lat, spot.lon], {
+          icon: L.divIcon({ html: badge, className: 'mk-count', iconSize: [size, size] }), // DOM 요소 그대로 사용
+        });
+      }
+      layer.bindTooltip(tooltipContent(title, [place, ...lines].join('\n')), { direction: 'top', className: 'conn-tip' }); // 정보
+      layer.on('click', () => onClick(spot)); // 선택
+      layer.addTo(this.connLayer); // 묶음에 추가
+      this.connMarkers.push({ layer, keys: new Set(spot.items.map(({ program }) => keyOf(program))) }); // 강조용 정보
+    }
+  }
+
+  // 선택한 프로그램의 마커만 강조하고 나머지는 흐리게. key가 null이면 모두 보통
+  highlightProgram(key) {
+    for (const { layer, keys } of this.connMarkers || []) {
+      const el = layer.getElement ? layer.getElement() : null; // SVG 경로 또는 배지 요소
+      if (!el) continue; // 아직 그려지지 않음
+      const hot = key !== null && keys.has(key); // 선택한 프로그램 포함
+      el.classList.toggle('hot', hot); // 강조
+      el.classList.toggle('dim', key !== null && !hot); // 흐리게
+    }
+  }
+
+  clearConnections() {
+    if (this.connLayer) this.connLayer.remove(); // 마커 묶음 제거
+    this.connLayer = null; // 비움
+    this.connMarkers = []; // 비움
+  }
+
+  // 좌표 하나로 이동 (목록에서 연결을 고른 경우)
+  focus(lat, lon) {
+    this.map.setView([lat, lon], Math.max(this.map.getZoom(), 4)); // 너무 멀면 조금 확대
   }
 
   clearTarget() {

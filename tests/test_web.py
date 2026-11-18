@@ -127,3 +127,37 @@ def test_settings_put_theme_and_key(client):
     assert body["theme"] == "light" and body["tile_key_set"] is True  # 저장됨
     assert body["tiles"]["dark"] == config.TILE_URL_DARK + "?key=ab%2Bc%2Fd"  # 키가 주소용으로 인코딩됨
     assert client.put("/api/settings", json={"theme": "blue"}).status_code == 400  # 잘못된 테마
+
+
+# --- 프로그램 연결 ---
+
+def test_connections_endpoint(service, settings):
+    from getip.models import Connection  # 데이터 클래스
+    from getip.services.connections import ConnectionService  # 연결 서비스
+
+    fake = [Connection(pid=1, process_name="a.exe", exe_path=None, local_port=5, remote_ip="1.1.1.1",
+                       remote_port=443, status="ESTABLISHED", is_public=True)]  # 가짜 연결 하나
+    conns = ConnectionService(service.geo, collector=lambda: list(fake))  # 가짜 수집
+    client = TestClient(create_app(service, settings, TOKEN, conns), base_url=BASE, headers={TOKEN_HEADER: TOKEN})  # 앱
+    body = client.get("/api/connections").json()  # 수집
+    assert body["shown"] == 1 and body["programs"][0]["name"] == "a.exe"  # 프로그램 묶음
+    assert body["programs"][0]["connections"][0]["geo"]["city"] == "Seoul"  # 위치 포함
+    assert client.get("/api/history").json()["total"] == 0  # 기록에는 저장하지 않음 (D9)
+
+
+def test_connections_unavailable_is_503(service, settings):
+    from getip.services.connections import ConnectionService  # 연결 서비스
+    from getip.system.connections import ConnectionsUnavailableError  # 읽기 실패
+
+    def broken():
+        raise ConnectionsUnavailableError("연결 목록을 읽을 수 없습니다: 권한")  # 실패 흉내
+
+    client = TestClient(create_app(service, settings, TOKEN, ConnectionService(service.geo, collector=broken)),
+                        base_url=BASE, headers={TOKEN_HEADER: TOKEN})  # 앱
+    res = client.get("/api/connections")  # 수집
+    assert res.status_code == 503 and "권한" in res.json()["detail"]  # 사유 전달
+
+
+def test_lookup_accepts_ipv6_literal(client):
+    body = client.post("/api/lookup", json={"target": "2606:4700:4700::1111"}).json()  # IPv6 직접 입력 (연결 목록의 상세 조회)
+    assert body["ip"] == "2606:4700:4700::1111" and body["all_ips"] == ["2606:4700:4700::1111"]  # DNS 없이 그대로

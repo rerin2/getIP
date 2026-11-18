@@ -25,13 +25,33 @@
   <main class="layout">
     <!-- 왼쪽: 조회 기록 -->
     <aside class="side">
-      <div class="side-head">
-        <strong>기록</strong>
-        <span id="history-count" class="muted"></span>
+      <!-- 탭: 기록 | 프로그램 연결 -->
+      <div class="tabs" role="tablist">
+        <button id="tab-history" type="button" role="tab" class="tab active" aria-selected="true">기록 <span id="history-count" class="muted"></span></button>
+        <button id="tab-conn" type="button" role="tab" class="tab" aria-selected="false">프로그램 연결 <span id="conn-count" class="muted"></span></button>
       </div>
-      <input id="history-search" type="search" placeholder="기록 검색 (입력·호스트·IP)" autocomplete="off">
-      <ul id="history-list" class="history"></ul>
-      <button id="btn-clear" type="button" class="danger">전체 삭제</button>
+
+      <!-- 기록 패널 -->
+      <div id="panel-history" class="panel">
+        <input id="history-search" type="search" placeholder="기록 검색 (입력·호스트·IP)" autocomplete="off">
+        <ul id="history-list" class="history"></ul>
+        <button id="btn-clear" type="button" class="danger">전체 삭제</button>
+      </div>
+
+      <!-- 프로그램 연결 패널: 탭을 열거나 새로고침할 때만 수집 -->
+      <div id="panel-conn" class="panel" hidden>
+        <div class="row">
+          <button id="btn-conn-refresh" type="button">새로고침</button>
+          <label class="check"><input id="conn-auto" type="checkbox"> 자동</label>
+          <span id="conn-time" class="muted small"></span>
+        </div>
+        <ul id="conn-list" class="conn-list"></ul>
+        <div class="row small">
+          <label class="check"><input id="conn-private" type="checkbox"> 사설 IP</label>
+          <label class="check"><input id="conn-closing" type="checkbox"> 종료·종료 중 연결</label>
+        </div>
+        <p class="muted small">TCP 연결만 표시됩니다 (UDP·QUIC 제외). 연결된 IP는 위치 조회를 위해 ip-api.com에 전달됩니다.</p>
+      </div>
     </aside>
 
     <!-- 가운데: 지도 + 안내 -->

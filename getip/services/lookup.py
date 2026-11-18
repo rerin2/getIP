@@ -37,6 +37,8 @@ class LookupService:
     def resolve(self, text: str) -> Tuple[Target, List[str]]:
         """입력을 정리하고 IP 목록을 찾는다. 형식이 잘못되면 InvalidTargetError."""
         target = target_module.normalize(text)  # 입력 검증
+        if target.is_ip:  # IP를 직접 입력한 경우
+            return target, [target.host]  # DNS 없이 그대로 (IPv6도 조회 가능하게: IPv4 전용 DNS 함수는 IPv6를 못 찾음)
         return target, self._resolve(target.host)  # 대상과 IP 목록 (못 찾으면 빈 목록)
 
     def lookup(self, target: Target, ip: str, all_ips: List[str]) -> LookupResult:

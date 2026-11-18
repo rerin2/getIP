@@ -62,3 +62,10 @@ def test_lookup_many_marks_unknown_ips_as_pending(cached_geo, provider):
     provider.unknown = {"9.9.9.9"}  # 공급자가 정보를 주지 않는 IP
     result = cached_geo.lookup_many(["8.8.8.8", "9.9.9.9"])  # 조회
     assert set(result.found) == {"8.8.8.8"} and result.pending == ["9.9.9.9"]  # 성공과 미해결 구분
+
+
+def test_lookup_many_cache_only_does_not_call_provider(cached_geo, provider):
+    cached_geo.lookup_many(["1.1.1.1"])  # 캐시 채우기
+    result = cached_geo.lookup_many(["1.1.1.1", "2.2.2.2"], fetch=False)  # 캐시만
+    assert list(result.found) == ["1.1.1.1"] and result.pending == ["2.2.2.2"]  # 없는 것은 대기
+    assert len(provider.batch_calls) == 1  # 두 번째는 외부 호출 없음
