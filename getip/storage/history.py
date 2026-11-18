@@ -20,6 +20,11 @@ class HistoryStore:
     def __init__(self, database: Database):
         self._db = database  # 사용할 DB
 
+    @property
+    def database(self) -> Database:
+        """이 기록이 쓰는 DB (같은 DB에 설정을 저장할 때 사용)."""
+        return self._db  # DB 객체
+
     def save(self, result: LookupResult) -> int:
         """조회 결과를 저장하고 기록 번호를 돌려준다. result.id도 채운다."""
         geo = result.geo  # 위치 정보 (없을 수 있음)
@@ -43,6 +48,18 @@ class HistoryStore:
             )  # 한 건 삽입
             result.id = cursor.lastrowid  # 부여된 번호를 결과에 기록
         return result.id  # 기록 번호
+
+    def update(self, result: LookupResult) -> bool:
+        """저장된 기록의 결과 전체를 바꾼다 (지연 측정·경로 추적을 덧붙일 때). 기록이 없으면 False."""
+        if result.id is None:  # 저장된 적 없는 결과
+            return False  # 바꿀 대상 없음
+        min_rtt = result.latency.min_ms if result.latency else None  # 목록·검색용 요약 컬럼
+        with self._db.connect() as conn:  # 연결 열기
+            cursor = conn.execute(
+                "UPDATE lookups SET result_json = ?, min_rtt_ms = ? WHERE id = ?",
+                (json.dumps(result_to_dict(result), ensure_ascii=False), min_rtt, result.id),
+            )  # 한 건 갱신
+            return cursor.rowcount > 0  # 실제로 바뀌었는지 (그 사이 삭제됐으면 False)
 
     def list(self, query: str = "", limit: int = 20, offset: int = 0) -> List[HistoryEntry]:
         """최신순 기록 목록. query가 있으면 입력·호스트·IP에서 부분 일치 검색."""

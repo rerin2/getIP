@@ -1,8 +1,8 @@
 // 화면 진입점: 부품(지도, 기록, 상세, 테마, 설정)을 연결한다.
 
-import { api } from './api.js'; // 로컬 API
+import { api, apiStream } from './api.js'; // 로컬 API (일반, 줄 단위 스트림)
 import { connKey, groupByLocation, programKey, renderConnections } from './connections.js'; // 프로그램 연결 목록
-import { renderConnectionDetail, renderDetail, renderSpotDetail } from './detail.js'; // 상세 패널
+import { renderConnectionDetail, renderDetail, renderMeDetail, renderSpotDetail } from './detail.js'; // 상세 패널
 import { renderHistory } from './history.js'; // 기록 목록
 import { GeoMap } from './map.js'; // 지도
 import { openSettings } from './settings.js'; // 설정 대화상자
@@ -37,6 +37,9 @@ const state = {
   connTimer: null, // 자동 새로고침 타이머
   connUi: { expanded: new Set(), selectedProgram: null, selectedConn: null }, // 펼친 프로그램, 선택 상태 (새로고침해도 유지)
   lastResult: null, // 기록 탭에서 마지막으로 본 조회 결과 (탭을 돌아오면 다시 표시)
+  probe: { latencyBusy: false, tracing: false }, // 지연 측정·경로 추적 진행 상태 (버튼 모양)
+  tracingId: null, // 추적 중인 기록 번호 (다른 기록을 보는 중이면 화면 갱신 생략)
+  me: null, // 마지막 /api/me 응답
 };
 
 let map = null; // GeoMap (설정을 읽은 뒤 생성)
@@ -79,13 +82,101 @@ async function loadHistory() {
   }
 }
 
+// 상세 패널 옵션: 다른 IP 선택 + 측정 버튼
+function detailOptions() {
+  const s = state.settings || {}; // 서버 설정 (원 설명용 계수)
+  return {
+    onPickIp: runLookup, // 다른 IP로 다시 조회
+    probe: {
+      handlers: { onLatency: measureLatency, onTrace: startTrace, onStopTrace: stopTrace }, // 버튼 동작
+      state: state.probe, // 진행 상태
+      factors: { fiber: s.fiber_km_per_ms, realistic: s.realistic_km_per_ms }, // 원 설명 글자
+    },
+  };
+}
+
+// 지금 보는 결과로 상세 패널만 다시 그림 (측정 상태가 바뀐 경우)
+function redrawDetail() {
+  if (state.tab === 'history' && state.lastResult) renderDetail(detailEl, state.lastResult, detailOptions()); // 기록 탭에서만
+}
+
 // 조회 결과 하나를 지도·상세에 표시
 function showResult(result) {
   state.lastResult = result; // 탭 전환 후 다시 보여주기 위해 기억
   state.selectedId = result.id; // 강조할 기록
-  renderDetail(detailEl, result, { onPickIp: runLookup }); // 상세 패널
+  renderDetail(detailEl, result, detailOptions()); // 상세 패널
   const shown = map.showResult(result); // 지도 마커
+  map.showProbe(result); // 저장된 반경 원·경로 (없으면 지움)
   setNotice(shown ? tileNotice() : '이 IP는 위치 정보가 없어 지도에 표시하지 않았습니다.'); // 좌표 없음 안내
+}
+
+// --- 지연 측정·경로 추적 (D12: 버튼을 눌렀을 때만) ---
+
+// [지연 측정]: 서버가 TCP·ping으로 재고 기록에 덧붙인 결과를 받아 다시 표시
+async function measureLatency() {
+  const id = state.lastResult && state.lastResult.id; // 대상 기록
+  if (id == null || state.probe.latencyBusy) return; // 저장 안 된 결과, 측정 중이면 무시
+  state.probe.latencyBusy = true; // 시작
+  redrawDetail(); // 버튼을 '측정 중'으로
+  setStatus('지연 측정 중… (몇 초 걸립니다)'); // 안내
+  try {
+    const result = await api(`/api/lookup/${id}/latency`, { method: 'POST' }); // 측정 + 저장
+    if (state.lastResult && state.lastResult.id === id) showResult(result); // 그 사이 다른 기록을 열지 않았으면 표시
+    const v = result.latency_view; // 요약
+    setStatus(v && v.min_ms != null ? `지연 최소 ${v.min_ms} ms` : '응답이 없어 지연을 재지 못했습니다 (방화벽이 막았을 수 있음).', !(v && v.min_ms != null)); // 결과 안내
+  } catch (e) {
+    setStatus(`지연 측정 실패: ${e.message}`, true); // 실패 사유
+  } finally {
+    state.probe.latencyBusy = false; // 끝
+    redrawDetail(); // 버튼 복구
+  }
+}
+
+// [경로 추적]: 홉이 도착할 때마다 표와 지도를 갱신. 끝나면 서버가 기록에 저장 (D15)
+async function startTrace() {
+  const id = state.lastResult && state.lastResult.id; // 대상 기록
+  if (id == null || state.probe.tracing) return; // 저장 안 된 결과, 이미 추적 중이면 무시
+  const working = { origin: null, hops: [], status: 'running', message: null }; // 진행 중 결과 (서버 형식과 같음)
+  state.probe.tracing = true; // 시작
+  state.tracingId = id; // 추적 대상 기억
+  const viewing = () => state.tab === 'history' && state.lastResult && state.lastResult.id === id; // 그 기록을 보고 있는지
+  const draw = () => {
+    if (!viewing()) return; // 다른 화면이면 갱신 생략 (서버는 계속 추적·저장)
+    state.lastResult.trace = working; // 지금 결과에 반영
+    map.showTrace(working.origin, working.hops); // 지도 경로
+    redrawDetail(); // 홉 표
+  };
+  draw(); // 빈 표 + '추적 중지' 버튼
+  setStatus('경로 추적 중… 홉마다 최대 3초씩 기다립니다.'); // 안내
+  try {
+    await apiStream(`/api/lookup/${id}/trace`, (event) => {
+      if (event.type === 'start') working.origin = event.origin; // 시작점
+      if (event.type === 'hop') {
+        const at = working.hops.findIndex((h) => h.index === event.hop.index); // 같은 번호가 있으면 위치 갱신
+        if (at >= 0) working.hops[at] = event.hop; // 교체
+        else working.hops.push(event.hop); // 새 홉
+      }
+      if (event.type === 'done') Object.assign(working, event.report); // 최종 결과 (상태·안내 문구)
+      draw(); // 다시 그림
+    });
+    setStatus(working.status === 'done' ? '' : working.message || '', working.status === 'error'); // 멈춘 사유
+  } catch (e) {
+    setStatus(`경로 추적 실패: ${e.message}`, true); // 시작 전 거부 (IPv6 등) 또는 연결 끊김
+    if (viewing() && !working.hops.length) state.lastResult.trace = null; // 아무것도 못 받았으면 빈 표 제거
+  } finally {
+    state.probe.tracing = false; // 끝
+    state.tracingId = null; // 비움
+    redrawDetail(); // 버튼 복구
+  }
+}
+
+// [추적 중지]: 서버가 추적을 멈추면 스트림이 'stopped'로 끝난다
+async function stopTrace() {
+  try {
+    await api('/api/trace/stop', { method: 'POST' }); // 중지 요청
+  } catch (e) {
+    setStatus(`중지 실패: ${e.message}`, true); // 실패 사유
+  }
 }
 
 // 조회 실행 (target: 입력, ip: 여러 IP 중 고른 것)
@@ -131,17 +222,46 @@ async function deleteRecord(id) {
   }
 }
 
-// 내 공인 IP 위치를 지도에 표시
-async function loadMe() {
+// 내 공인 IP와 내 위치를 지도에 표시. showDetail이면 상세 패널에 '내 위치' 화면을 띄움
+async function loadMe(showDetail = false) {
   meBtn.disabled = true; // 중복 클릭 방지
   try {
-    const me = await api('/api/me'); // 내 IP 조회
+    const me = await api('/api/me'); // 내 IP 조회 + 사용 중인 위치
+    state.me = me; // 기억
     map.showMe(me); // 지도에 표시
-    meBtn.title = `내 IP: ${me.ip}`; // 마우스 올리면 IP
+    if (me.geo) meBtn.title = `내 IP: ${me.geo.ip}`; // 마우스 올리면 IP
+    if (me.error && !me.origin) setStatus(`내 위치를 가져오지 못했습니다: ${me.error}`, true); // 위치를 전혀 모름
+    if (showDetail) renderMeDetail(detailEl, me, { onPick: pickMyLocation, onReset: resetMyLocation }); // 내 위치 화면
   } catch (e) {
-    setStatus(`내 위치를 가져오지 못했습니다: ${e.message}`, true); // 실패 사유
+    setStatus(`내 위치를 가져오지 못했습니다: ${e.message}`, true); // 서버 오류
   } finally {
     meBtn.disabled = false; // 버튼 복구
+  }
+}
+
+// 지도를 클릭해 내 위치 지정 (D13)
+async function pickMyLocation() {
+  setNotice('지도에서 내 위치를 클릭하세요. (Esc: 취소)'); // 안내
+  const point = await map.pickLocation(); // 클릭 대기
+  setNotice(tileNotice()); // 안내 복구
+  if (!point) return; // 취소
+  try {
+    await api('/api/me/location', { method: 'PUT', body: point }); // 저장
+    setStatus('내 위치를 지정했습니다. 이후 측정부터 이 위치를 기준으로 원을 그립니다.'); // 안내
+    await loadMe(true); // 지도·패널 갱신
+  } catch (e) {
+    setStatus(`내 위치를 저장하지 못했습니다: ${e.message}`, true); // 실패 사유
+  }
+}
+
+// 직접 지정을 지우고 내 IP 위치로 되돌림
+async function resetMyLocation() {
+  try {
+    await api('/api/me/location', { method: 'DELETE' }); // 삭제
+    setStatus('내 IP 위치를 사용합니다.'); // 안내
+    await loadMe(true); // 지도·패널 갱신
+  } catch (e) {
+    setStatus(`되돌리지 못했습니다: ${e.message}`, true); // 실패 사유
   }
 }
 
@@ -238,7 +358,7 @@ function switchTab(name) {
     refreshConnections(); // 탭을 열 때 수집 (설계: 열거나 새로고침할 때만)
   } else {
     map.clearConnections(); // 연결 마커 제거
-    if (state.lastResult) renderDetail(detailEl, state.lastResult, { onPickIp: runLookup }); // 보던 결과 복원
+    if (state.lastResult) renderDetail(detailEl, state.lastResult, detailOptions()); // 보던 결과 복원
     setStatus(''); // 연결 탭 안내 지움
   }
   updateAutoRefresh(); // 자동 새로고침은 연결 탭에서만
@@ -256,7 +376,7 @@ function bindEvents() {
   targetInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') runLookup(targetInput.value); // Enter로 조회
   });
-  meBtn.addEventListener('click', loadMe); // 내 IP 버튼
+  meBtn.addEventListener('click', () => loadMe(true)); // 내 IP 버튼: 지도 + 내 위치 화면
   themeBtn.addEventListener('click', async () => {
     try {
       await cycleTheme(); // 다음 테마로 (화면은 즉시 바뀜)
@@ -299,7 +419,7 @@ async function main() {
   applySettings(settings); // 설정 반영
   bindEvents(); // 버튼 연결
   targetInput.focus(); // 바로 입력할 수 있게
-  await Promise.all([loadHistory(), loadMe()]); // 기록과 내 위치를 동시에
+  await Promise.all([loadHistory(), loadMe(false)]); // 기록과 내 위치를 동시에 (상세 패널은 그대로)
 }
 
 main(); // 실행

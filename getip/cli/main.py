@@ -5,12 +5,17 @@ from typing import Dict, List, Optional  # 타입 표기
 from getip import config  # 홉 수·목록 건수 설정
 from getip.cli.connections_view import handle_connections  # 프로그램 연결 표
 from getip.cli.history_view import handle_history  # 기록 보기 화면
+from getip.cli.probe_view import ACTIVE_NOTICE, format_trace_summary, handle_latency  # 지연 측정 화면
+from getip.cli.probe_view import format_latency as format_latency_lines  # 지연 측정 결과 줄 (홉 지연용 format_latency와 구분)
 from getip.geo.base import GeoLookupError  # 위치 조회 실패 예외
 from getip.models import GeoInfo, Hop, LookupResult  # 결과 데이터 클래스
 from getip.net import target  # 입력 형식 오류 예외
 from getip.probe import traceroute  # 경로 추적
 from getip.services.connections import ConnectionService  # 프로그램 연결 조회
-from getip.services.lookup import LookupService, create_default  # 조회 서비스
+from getip.services.lookup import LookupService, create_service, open_database  # 조회 서비스
+from getip.services.origin import OriginService  # 내 위치 (지연 측정 위치)
+from getip.services.probe import ProbeService  # 지연 측정
+from getip.storage.settings import SettingsStore  # 수동 지정한 내 위치 (GUI와 같은 DB)
 
 _RESULT_LINE = "-" * 35  # 조회 결과 구분선
 _TRACE_LINE = "-" * 90  # 경로 추적 구분선
@@ -45,6 +50,11 @@ def format_result(result: LookupResult) -> Dict[str, object]:
         lines["Reverse DNS"] = result.reverse_dns  # 이름 표시
     for number, warning in enumerate(result.warnings, start=1):  # 실패 사유마다
         lines["Error" if number == 1 else f"Error {number}"] = warning  # 첫 번째는 기존과 같은 항목 이름
+    for number, line in enumerate(format_latency_lines(result), start=1):  # 지연 측정 결과가 있으면 (기록 보기)
+        lines[f"Latency {number}"] = line  # 줄마다 항목
+    trace = format_trace_summary(result.trace)  # 경로 추적 요약
+    if trace:  # 추적한 기록이면
+        lines["Trace"] = trace  # 한 줄
     return lines  # 출력용 묶음
 
 
@@ -117,61 +127,85 @@ def handle_trace(service: LookupService) -> None:
         print(f"[!] {exc}")  # 사유 안내
         return  # 메뉴로 복귀
 
+    try:
+        run = traceroute.TraceRun(host)  # 명령 실행 (IPv6는 거부)
+    except traceroute.TracerouteUnsupportedError as exc:  # IPv6 (P8)
+        print(f"[!] {exc}")  # 사유 안내
+        return  # 메뉴로 복귀
+    except traceroute.TracerouteUnavailableError:  # 명령이 없음
+        print("[!] tracert(또는 traceroute) 명령어를 찾을 수 없습니다. OS 환경을 확인해주세요.")  # 환경 안내
+        return  # 메뉴로 복귀
+
     print(f"\n[*] '{host}' 라우팅 경로 추적을 시작합니다. (최대 {config.TRACE_MAX_HOPS}홉)")  # 시작 안내
+    print(f"[*] {ACTIVE_NOTICE}")  # 능동 접속 안내
     print(_TRACE_LINE)  # 구분선
     try:
-        for hop in traceroute.trace(host):  # 홉이 확인되는 대로
+        for hop in run.hops():  # 홉이 확인되는 대로 (3회 측정 중 최솟값, P6)
             info = service.hop_geo(hop.ip) if hop.ip else None  # 응답한 홉만 위치 조회 (사설 IP·캐시는 API 호출 없음)
             print(format_hop(hop, info))  # 한 줄 출력
         print(_TRACE_LINE)  # 구분선
-        print("[*] 라우팅 경로 추적이 완료되었습니다.")  # 완료 안내
-    except traceroute.TracerouteUnavailableError:  # 명령이 없음
-        print("[!] tracert(또는 traceroute) 명령어를 찾을 수 없습니다. OS 환경을 확인해주세요.")  # 환경 안내
+        if run.silent_cut:  # 응답 없는 홉이 이어져 멈춤
+            print(f"[*] 응답 없는 홉이 {run.max_silent}개 이어져 추적을 멈췄습니다. (대상이 추적 패킷에 응답하지 않는 것으로 보임)")  # 사유
+        else:  # 끝까지 추적
+            print("[*] 라우팅 경로 추적이 완료되었습니다.")  # 완료 안내
+    except KeyboardInterrupt:  # Ctrl+C로 추적만 중단
+        run.stop()  # 프로세스 종료
+        print("\n[*] 경로 추적을 중단했습니다.")  # 안내
     except OSError as exc:  # 실행 권한 등 운영체제 오류
         print(f"[!] 추적 중 오류 발생: {exc}")  # 원인 출력
 
 
-def handle_lookup(service: LookupService, text: str) -> None:
-    """도메인/URL/IP를 조회해 정보를 출력하고 기록에 남긴다."""
+def handle_lookup(service: LookupService, text: str) -> Optional[LookupResult]:
+    """도메인/URL/IP를 조회해 정보를 출력하고 기록에 남긴다. 조회 결과를 돌려준다 (실패·취소면 None)."""
     try:
         lookup_target, ip_list = service.resolve(text)  # 입력 검증 + DNS 조회
     except target.InvalidTargetError as exc:  # 형식 오류
         print(f"[!] {exc}")  # 사유 안내
-        return  # 메뉴로 복귀
+        return None  # 메뉴로 복귀
     print(f"\n[*] 대상 도메인: {lookup_target.host}")  # 정리된 대상 안내
 
     if not ip_list:  # 주소를 찾지 못함
         print("[!] 도메인의 IP 주소를 찾을 수 없습니다. 다시 확인해주세요.")  # 실패 안내
-        return  # 메뉴로 복귀
+        return None  # 메뉴로 복귀
 
     selected_ip = _choose_ip(ip_list)  # 조회할 IP 결정
     if selected_ip is None:  # 사용자가 취소
-        return  # 메뉴로 복귀
+        return None  # 메뉴로 복귀
 
     print(f"\n[*] {selected_ip} 정보 조회 중...")  # 진행 안내
     result = service.lookup(lookup_target, selected_ip, ip_list)  # 조회 + 기록 저장
     print_lines(format_result(result))  # 결과 출력
     if result.id is not None:  # 기록에 저장됐으면
-        print(f"[*] 기록 #{result.id} 로 저장되었습니다. ('h' 입력으로 기록 보기)")  # 기록 번호 안내
+        print(f"[*] 기록 #{result.id} 로 저장되었습니다. ('h' 기록 보기, 'l' 이 대상 지연 측정)")  # 기록 번호 안내
+    return result  # 'l' 명령이 쓸 마지막 결과
 
 
-def main(service: Optional[LookupService] = None) -> None:
+def create_probe(service: LookupService) -> ProbeService:
+    """조회 서비스와 같은 DB·캐시를 쓰는 지연 측정 서비스. GUI에서 지정한 내 위치도 같이 쓴다."""
+    origins = OriginService(service.my_ip, SettingsStore(service.history.database))  # 내 위치
+    return ProbeService(service.history, service.geo, origins)  # 측정 서비스
+
+
+def main(service: Optional[LookupService] = None, probe: Optional[ProbeService] = None) -> None:
     """메뉴를 보여주고 종료 명령이 올 때까지 입력을 처리한다."""
-    service = service or create_default()  # 서비스가 주어지지 않으면 기본 구성 사용
+    service = service or create_service(*open_database())  # 없으면 기본 구성 (DB를 열 수 없으면 임시 DB)
+    probe = probe or create_probe(service)  # 지연 측정 서비스
     print("=== IP & ISP 및 라우팅 조회 도구 ===")  # 제목
     print("- URL 또는 도메인 입력: 해당 주소 IP/ISP 조회")  # 사용법 1
     print("- 'm' 입력: 현재 기기의 공인 IP 조회")  # 사용법 2
     print("- 't' 입력: 라우팅 추적 (Traceroute) 실행")  # 사용법 3
+    print("- 'l' 입력: 마지막 조회 대상의 지연 측정 (대상 서버에 직접 접속)")  # 사용법 3-1
     print("- 'h' 입력: 조회 기록 보기")  # 사용법 4
     print("- 'c' 입력: 이 PC의 프로그램별 연결 보기")  # 사용법 5
     print("- 'q' 입력: 프로그램 종료")  # 사용법 6
     if service.storage_warning:  # 기록 저장소에 문제가 있으면
         print(f"[!] {service.storage_warning}")  # 시작할 때 알림
     connections = ConnectionService(service.geo)  # 연결 조회 (위치 캐시 공유, 실행 중 종료된 연결을 기억)
+    last: Optional[LookupResult] = None  # 이번 실행에서 마지막으로 조회한 결과 ('l' 대상)
 
     while True:  # 종료 명령 전까지 반복
         try:
-            text = input("\n[입력 대기] 도메인/URL, m(내 IP), t(라우팅 추적), h(기록), c(연결), q(종료) : ").strip()  # 명령 입력
+            text = input("\n[입력 대기] 도메인/URL, m(내 IP), t(라우팅 추적), l(지연), h(기록), c(연결), q(종료) : ").strip()  # 명령 입력
             command = text.lower()  # 대소문자 구분 없이 비교
             if command in ("q", "exit"):  # 종료 명령
                 print("프로그램을 종료합니다.")  # 종료 안내
@@ -182,12 +216,14 @@ def main(service: Optional[LookupService] = None) -> None:
                 handle_my_ip(service)  # 실행
             elif command == "t":  # 경로 추적
                 handle_trace(service)  # 실행
+            elif command == "l":  # 마지막 조회 대상 지연 측정
+                last = handle_latency(probe, last) or last  # 측정 + 저장 (실패하면 이전 결과 유지)
             elif command == "c":  # 프로그램 연결 보기
                 handle_connections(connections)  # 실행
             elif command == "h":  # 기록 보기
                 handle_history(service.history, print_result=lambda r: print_lines(format_result(r)))  # 실행
             else:  # 그 외는 조회 대상으로 간주
-                handle_lookup(service, text)  # 실행
+                last = handle_lookup(service, text) or last  # 실행 (실패·취소면 이전 결과 유지)
         except (EOFError, KeyboardInterrupt):  # 입력 종료(Ctrl+Z) 또는 Ctrl+C
             print("\n프로그램을 종료합니다.")  # 종료 안내
             break  # 반복 탈출

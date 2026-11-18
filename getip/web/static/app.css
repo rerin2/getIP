@@ -144,6 +144,15 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .mk-count.dim { opacity: .3; }
 .mk-count.hot { background: var(--marker-target); }
 
+/* 지연 반경 원: 옅은 점선 = 물리적 상한, 진한 원 = 현실 추정 (D14) */
+.rtt-upper { stroke: var(--rtt); stroke-width: 1.2; stroke-dasharray: 5 6; fill: var(--rtt); fill-opacity: .04; }
+.rtt-typical { stroke: var(--rtt); stroke-width: 1.8; fill: var(--rtt); fill-opacity: .10; }
+/* 경로 추적선과 홉 */
+.mk-trace { stroke: var(--trace); fill: none; stroke-width: 2.5; stroke-opacity: .9; }
+.mk-hop { stroke: var(--trace); fill: var(--panel); fill-opacity: 1; stroke-width: 2; }
+/* 내 위치 지정 중: 십자 커서 */
+#map.picking, #map.picking .leaflet-interactive { cursor: crosshair; }
+
 /* Leaflet 기본 부품을 테마에 맞춤 */
 .leaflet-container { font: inherit; }
 .leaflet-bar a, .leaflet-bar a:hover { background: var(--panel); color: var(--text); border-bottom-color: var(--border); }
@@ -173,6 +182,15 @@ button.link { border: none; background: none; color: var(--accent); padding: 0 4
 .warnings { margin: 6px 0; padding: 6px 10px; border-radius: 6px; background: var(--warn-bg); color: var(--warn); }
 .warnings ul { margin: 0; padding-left: 18px; }
 .note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+/* 측정 부분 (지연·경로 추적) */
+.probe { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; }
+.probe-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.probe-block h4 { margin: 10px 0 2px; font-size: 13px; }
+table.hops { border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+table.hops th, table.hops td { text-align: left; padding: 2px 12px 2px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.hops th { color: var(--muted); font-weight: 600; }
+table.hops td:nth-child(2) { font-family: Consolas, monospace; }
+table.hops tr.silent td { color: var(--muted); }
 
 /* 설정 대화상자 */
 dialog {

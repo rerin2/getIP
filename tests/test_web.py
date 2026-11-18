@@ -90,10 +90,73 @@ def test_resolve_lists_ips(client):
         "host": "example.com", "is_ip": False, "ips": ["1.2.3.4"]}  # 대상 정보와 IP 목록
 
 
-def test_me_maps_failure_to_502(client, provider):
-    assert client.get("/api/me").json()["ip"] == "9.9.9.9"  # 가짜 공급자의 내 IP
+def test_me_returns_geo_origin_and_error(client, provider):
+    body = client.get("/api/me").json()  # 내 IP
+    assert body["geo"]["ip"] == "9.9.9.9" and body["origin"]["source"] == "ip-api" and body["error"] is None  # 자동 위치
     provider.error = GeoLookupError("실패")  # 외부 서비스 실패
-    assert client.get("/api/me").status_code == 502  # 502로 전달
+    body = client.get("/api/me").json()  # 다시 조회
+    assert body["geo"] is None and body["origin"] is None and body["error"] == "실패"  # 200 + 사유 (화면이 안내)
+
+
+def test_me_location_set_and_clear(client):
+    res = client.put("/api/me/location", json={"lat": 35.1, "lon": 129.0})  # 지도에서 지정 (D13)
+    assert res.json()["origin"] == {"lat": 35.1, "lon": 129.0, "source": "manual"}  # 저장
+    assert client.get("/api/me").json()["origin"]["source"] == "manual"  # 이후 수동 위치 사용
+    assert client.put("/api/me/location", json={"lat": 95, "lon": 0}).status_code == 400  # 범위 밖
+    assert client.delete("/api/me/location").json()["origin"]["source"] == "ip-api"  # 되돌리기
+
+
+# --- 지연 측정·경로 추적 ---
+
+def _probe_client(service, settings, run=None):
+    """가짜 측정·추적을 끼운 클라이언트."""
+    from getip.models import LatencyResult  # 데이터 클래스
+    from getip.services.origin import OriginService  # 내 위치
+    from getip.services.probe import ProbeService  # 측정 서비스
+
+    probe = ProbeService(service.history, service.geo, OriginService(service.my_ip, settings),
+                         measure=lambda ip: [LatencyResult("tcp:443", [31.0], 1, 31.0, 0.0),
+                                             LatencyResult("icmp", [10.0], 1, 10.0, 0.0)],  # TCP 31ms, ICMP 10ms
+                         start_run=lambda ip: run)  # 가짜 추적
+    app = create_app(service, settings, TOKEN, probe=probe)  # 앱
+    return TestClient(app, base_url=BASE, headers={TOKEN_HEADER: TOKEN})  # 클라이언트
+
+
+def test_latency_endpoint_adds_view(service, settings):
+    client = _probe_client(service, settings)  # 클라이언트
+    record = client.post("/api/lookup", json={"target": "8.8.8.8"}).json()  # 조회 (측정 없음, D12)
+    assert record["latency"] is None and record["latency_view"] is None  # 자동 측정 안 함
+    body = client.post(f"/api/lookup/{record['id']}/latency").json()  # 버튼
+    view = body["latency_view"]  # 화면용 요약
+    assert view["min_ms"] == 10.0 and view["upper_km"] == 10 * config.FIBER_KM_PER_MS  # 두 방법 중 최솟값 기준
+    assert view["typical_km"] == 10 * config.REALISTIC_KM_PER_MS and view["db_distance_km"] == 0  # 가짜 위치가 모두 서울 좌표
+    assert client.get(f"/api/history/{record['id']}").json()["latency"]["results"][0]["method"] == "tcp:443"  # 저장됨
+    assert client.post("/api/lookup/999/latency").status_code == 404  # 없는 기록
+
+
+def test_trace_stream_lines(service, settings):
+    import json  # 줄 해석
+
+    from getip.models import Hop  # 데이터 클래스
+    from test_probe_service import FakeRun  # 가짜 추적
+
+    client = _probe_client(service, settings, FakeRun([Hop(1, "192.168.0.1", 1.0, True), Hop(2, "8.8.8.8", 30.0)]))  # 클라이언트
+    record = client.post("/api/lookup", json={"target": "8.8.8.8"}).json()  # 조회
+    res = client.post(f"/api/lookup/{record['id']}/trace")  # 추적
+    assert res.status_code == 200 and res.headers["content-type"].startswith("application/x-ndjson")  # 줄 단위 JSON
+    events = [json.loads(line) for line in res.text.splitlines()]  # 사건들
+    assert [e["type"] for e in events] == ["start", "hop", "hop", "done"]  # 순서
+    assert events[2]["hop"]["geo"]["city"] == "Seoul" and events[-1]["report"]["status"] == "done"  # 위치와 종료 상태
+    saved = client.get(f"/api/history/{record['id']}").json()["trace"]  # 기록
+    assert len(saved["hops"]) == 2  # 덧붙어 저장됨 (D15)
+    assert client.post("/api/trace/stop").json() == {"stopped": False}  # 실행 중인 추적 없음
+
+
+def test_trace_rejects_ipv6_and_unknown(client):
+    record = client.post("/api/lookup", json={"target": "2606:4700:4700::1111"}).json()  # IPv6 기록
+    res = client.post(f"/api/lookup/{record['id']}/trace")  # 추적
+    assert res.status_code == 400 and "IPv6" in res.json()["detail"]  # 명령을 실행하지 않고 거부
+    assert client.post("/api/lookup/999/trace").status_code == 404  # 없는 기록
 
 
 # --- 기록 ---

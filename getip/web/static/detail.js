@@ -1,6 +1,7 @@
 // 아래 상세 패널. 조회 결과 하나를 항목: 값 표로 보여준다. 외부 문자열은 textContent로만 넣는다.
 
 import { shortTime } from './history.js'; // 시각 표시
+import { renderProbeSection } from './probe.js'; // 지연 측정·경로 추적 부분
 
 // 값이 비었으면 '-' 표시
 function text(value) {
@@ -40,7 +41,8 @@ function otherIps(result, onPickIp) {
 }
 
 // el: 패널 본문, result: 조회 결과 JSON, onPickIp(target, ip): 다른 IP 선택 시
-export function renderDetail(el, result, { onPickIp }) {
+// probe: {handlers: {onLatency, onTrace, onStopTrace}, state: {latencyBusy, tracing}, factors} — 없으면 측정 부분 생략
+export function renderDetail(el, result, { onPickIp, probe }) {
   const geo = result.geo || {}; // 위치 정보가 없으면 빈 객체
   const dl = document.createElement('dl'); // 표
   dl.className = 'detail-grid'; // 2열×2 배치
@@ -71,6 +73,7 @@ export function renderDetail(el, result, { onPickIp }) {
     box.append(ul); // 조립
     parts.push(box); // 추가
   }
+  if (probe) parts.push(renderProbeSection(result, probe.handlers, probe.state, probe.factors)); // 측정 버튼·결과
   const note = document.createElement('p'); // 한계·전달 안내 (설계 5절)
   note.className = 'note'; // 작은 글자
   note.textContent = '위치는 ip-api.com 데이터베이스 기준이라 실제 서버 위치와 다를 수 있습니다(CDN은 접속 지점 위치). 조회한 IP는 ip-api.com에 암호화되지 않은 채 전달됩니다.'; // 안내 문구
@@ -138,4 +141,46 @@ export function renderSpotDetail(el, spot, { onPick }) {
     ul.append(li); // 추가
   }
   el.replaceChildren(head, ul); // 패널 교체
+}
+
+// '내 IP' 상세: 내 IP 정보와 지금 쓰는 내 위치, 지도에서 지정·되돌리기 버튼 (D13).
+// me: /api/me 응답 {geo, origin, error}, onPick(): 지도에서 지정, onReset(): 자동 위치로
+export function renderMeDetail(el, me, { onPick, onReset }) {
+  const geo = me.geo || {}; // ip-api 정보 (실패하면 빈 객체)
+  const origin = me.origin; // 지금 쓰는 위치
+  const dl = document.createElement('dl'); // 표
+  dl.className = 'detail-grid'; // 배치
+  addRow(dl, '내 IP', geo.ip); // 공인 IP
+  addRow(dl, 'ISP', geo.isp); // 사업자
+  addRow(dl, 'IP 위치', geo.lat == null ? null : `${[geo.city, geo.country].filter(Boolean).join(', ')} (${geo.lat}, ${geo.lon})`); // ip-api 위치
+  let using = '모름'; // 사용 중인 위치 글자
+  if (origin) using = origin.source === 'manual' ? `직접 지정 (${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)})` : 'IP 위치 사용'; // 출처
+  addRow(dl, '사용 중인 위치', using); // 반경 원·경로선 시작점
+
+  const bar = document.createElement('div'); // 버튼 줄
+  bar.className = 'probe-bar'; // 모양
+  const pick = document.createElement('button'); // 지정 버튼
+  pick.type = 'button'; // 폼 전송 아님
+  pick.className = 'primary'; // 주 버튼
+  pick.textContent = '지도에서 내 위치 지정'; // 글자
+  pick.addEventListener('click', onPick); // 동작
+  const reset = document.createElement('button'); // 되돌리기 버튼
+  reset.type = 'button'; // 폼 전송 아님
+  reset.textContent = '자동 위치로 되돌리기'; // 글자
+  reset.disabled = !origin || origin.source !== 'manual'; // 직접 지정했을 때만
+  reset.addEventListener('click', onReset); // 동작
+  bar.append(pick, reset); // 조립
+
+  const parts = [dl, bar]; // 패널 내용
+  if (me.error) {
+    const box = document.createElement('div'); // 경고
+    box.className = 'warnings'; // 노란 바탕
+    box.textContent = `내 IP 조회 실패: ${me.error}`; // 사유
+    parts.push(box); // 추가
+  }
+  const note = document.createElement('p'); // 안내
+  note.className = 'note'; // 작은 글자
+  note.textContent = '지연 반경 원과 경로선은 이 위치에서 시작합니다. IP 위치는 통신사 장비 기준이라 실제 위치와 수십 km 이상 다를 수 있으니, 다르면 지도에서 직접 지정하세요. 지정한 위치는 이 PC의 기록 DB에만 저장됩니다.'; // 안내 문구
+  parts.push(note); // 추가
+  el.replaceChildren(...parts); // 패널 교체
 }

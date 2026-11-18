@@ -1,5 +1,7 @@
-// Leaflet 지도: 테마별 타일, 내 위치·조회 대상 마커, 둘을 잇는 선.
-// 마커 색은 CSS 클래스(.mk-*)로 정해 테마 변수를 따른다.
+// Leaflet 지도: 테마별 타일, 내 위치·조회 대상 마커, 둘을 잇는 선, 지연 반경 원, 경로 추적선.
+// 마커 색은 CSS 클래스(.mk-*, .rtt-*)로 정해 테마 변수를 따른다.
+
+import { geodesicRing, nearLon } from './geodesic.js'; // 지구 위의 원, 경도 이어 붙이기
 
 const WORLD_VIEW = { center: [20, 0], zoom: 2 }; // 처음 보이는 범위 (세계 전체)
 const TARGET_ZOOM = 5; // 내 위치 없이 대상만 있을 때 확대 정도
@@ -16,14 +18,6 @@ function tooltipContent(title, subtitle) {
     box.append(sub); // 추가
   }
   return box; // 완성된 요소
-}
-
-// 대상 경도를 내 위치 기준 ±180° 안으로 옮긴다 (태평양을 건너는 선이 지구 반대편으로 돌아가지 않게)
-function nearLon(fromLon, lon) {
-  let out = lon; // 옮길 경도
-  while (out - fromLon > 180) out -= 360; // 너무 동쪽이면 한 바퀴 서쪽으로
-  while (out - fromLon < -180) out += 360; // 너무 서쪽이면 한 바퀴 동쪽으로
-  return out; // 가까운 쪽 경도
 }
 
 // 위치 문자열 "도시, 국가"
@@ -45,6 +39,8 @@ export class GeoMap {
     this.route = null; // 연결선
     this.connLayer = null; // 프로그램 연결 마커 묶음
     this.connMarkers = []; // 강조 처리용 마커 정보
+    this.rttLayer = null; // 지연 반경 원 묶음
+    this.traceLayer = null; // 경로 추적선·홉 마커 묶음
   }
 
   // 타일 주소를 바꾼다. null이면 타일 없이 바탕색만 보인다
@@ -67,17 +63,39 @@ export class GeoMap {
     this.tiles = L.tileLayer(url, { attribution: this.attribution, maxZoom: 19, subdomains: '' }).addTo(this.map); // 새 레이어
   }
 
-  // 내 위치 표시 (geo: /api/me 응답)
-  showMe(geo) {
+  // 내 위치 표시 (me: /api/me 응답 {geo, origin, error}). 수동 지정 위치가 있으면 그곳에 찍는다
+  showMe(me) {
     if (this.me) this.me.remove(); // 이전 마커 제거
     this.me = null; // 비움
     this.meLatLng = null; // 비움
-    if (geo.lat == null || geo.lon == null) return; // 좌표 없음
-    this.meLatLng = [geo.lat, geo.lon]; // 좌표 기억
+    const origin = me && me.origin; // 지금 쓰는 내 위치
+    if (!origin) return; // 위치 모름
+    this.meLatLng = [origin.lat, origin.lon]; // 좌표 기억
+    const geo = me.geo || {}; // ip-api 정보 (실패하면 빈 객체)
+    const title = origin.source === 'manual' ? '내 위치 (직접 지정)' : `내 위치 (${geo.ip || '?'})`; // 출처에 따라 제목
+    const sub = origin.source === 'manual' ? `${origin.lat.toFixed(4)}, ${origin.lon.toFixed(4)}` : placeText(geo); // 좌표 또는 도시
     this.me = L.circleMarker(this.meLatLng, { radius: 7, className: 'mk-me' }) // 파란 원
-      .bindTooltip(tooltipContent(`내 위치 (${geo.ip})`, placeText(geo)), { direction: 'top' }) // 마우스 올리면 정보
+      .bindTooltip(tooltipContent(title, sub), { direction: 'top' }) // 마우스 올리면 정보
       .addTo(this.map); // 지도에 추가
     if (!this.target) this.map.setView(this.meLatLng, 4); // 대상이 없으면 내 위치로 이동
+  }
+
+  // 지도를 한 번 클릭해 좌표를 고른다. Esc를 누르면 null. 고르는 동안 커서가 십자 모양
+  pickLocation() {
+    return new Promise((resolve) => {
+      const box = this.map.getContainer(); // 지도 요소
+      box.classList.add('picking'); // 십자 커서
+      const finish = (value) => {
+        box.classList.remove('picking'); // 커서 복구
+        this.map.off('click', onClick); // 이벤트 해제
+        document.removeEventListener('keydown', onKey); // 이벤트 해제
+        resolve(value); // 결과 전달
+      };
+      const onClick = (e) => finish({ lat: e.latlng.lat, lon: e.latlng.lng }); // 클릭한 좌표 (경도 정리는 서버가 함)
+      const onKey = (e) => { if (e.key === 'Escape') finish(null); }; // 취소
+      this.map.on('click', onClick); // 클릭 대기
+      document.addEventListener('keydown', onKey); // Esc 대기
+    });
   }
 
   // 조회 결과 표시. 좌표가 없으면 false
@@ -99,9 +117,58 @@ export class GeoMap {
     return true; // 표시함
   }
 
-  // 조회 대상 마커·선을 보이거나 숨긴다 (연결 탭에서는 숨김)
+  // 지연 측정·경로 추적 결과 표시 (조회 결과에 저장된 값으로). 없으면 지움
+  showProbe(result) {
+    this.clearProbe(); // 이전 원·경로 제거
+    const view = result.latency_view; // 서버가 계산한 반경
+    const origin = result.latency && result.latency.origin; // 측정한 곳 (지금 내 위치가 아니라 측정 당시 위치)
+    if (origin && view && view.upper_km) this.showRtt(origin, view); // 반경 원
+    if (result.trace) this.showTrace(result.trace.origin, result.trace.hops); // 경로
+  }
+
+  // 반경 원 두 겹: 옅은 점선 = 물리적 상한, 진한 원 = 현실 추정. 지구 대부분을 덮는 원은 생략
+  showRtt(origin, view) {
+    if (this.rttLayer) this.rttLayer.remove(); // 이전 원 제거
+    this.rttLayer = L.layerGroup().addTo(this.map); // 원 묶음
+    const rings = [['rtt-upper', view.upper_km], ['rtt-typical', view.typical_km]]; // 바깥 → 안쪽 순서
+    for (const [className, km] of rings) {
+      const points = geodesicRing(origin.lat, origin.lon, km); // 둘레 좌표
+      if (!points) continue; // 지구 대부분을 덮으면 생략
+      L.polygon(points, { className, interactive: false }).addTo(this.rttLayer); // 다각형 (클릭 통과)
+    }
+  }
+
+  // 경로 추적선: 시작점 → 위치를 아는 홉들. 홉이 도착할 때마다 다시 그린다 (30개 이하라 부담 없음)
+  showTrace(origin, hops) {
+    if (this.traceLayer) this.traceLayer.remove(); // 이전 경로 제거
+    this.traceLayer = L.layerGroup().addTo(this.map); // 경로 묶음
+    const points = []; // 선을 이을 좌표
+    let prevLon = origin ? origin.lon : null; // 경도 이어 붙이기 기준
+    if (origin) points.push([origin.lat, origin.lon]); // 시작점
+    for (const hop of hops || []) {
+      const geo = hop.geo; // 홉 위치
+      if (!geo || geo.lat == null || geo.lon == null) continue; // 사설·무응답 홉은 선에서 제외
+      const lon = prevLon == null ? geo.lon : nearLon(prevLon, geo.lon); // 태평양을 건너는 선이 튀지 않게
+      prevLon = lon; // 다음 기준
+      points.push([geo.lat, lon]); // 선에 추가
+      const rtt = hop.rtt_ms == null ? '-' : `${hop.rtt_less_than ? '<' : ''}${hop.rtt_ms}ms`; // 지연 글자
+      L.circleMarker([geo.lat, lon], { radius: 4, className: 'mk-hop' }) // 작은 원
+        .bindTooltip(tooltipContent(`${hop.index}. ${hop.ip}`, [rtt, placeText(geo), geo.isp].join('\n')), { direction: 'top' }) // 지연·위치·사업자
+        .addTo(this.traceLayer); // 묶음에 추가
+    }
+    if (points.length > 1) L.polyline(points, { className: 'mk-trace', interactive: false }).addTo(this.traceLayer); // 경로선
+  }
+
+  clearProbe() {
+    if (this.rttLayer) this.rttLayer.remove(); // 원 제거
+    if (this.traceLayer) this.traceLayer.remove(); // 경로 제거
+    this.rttLayer = null; // 비움
+    this.traceLayer = null; // 비움
+  }
+
+  // 조회 대상 마커·선·반경·경로를 보이거나 숨긴다 (연결 탭에서는 숨김)
   setTargetVisible(show) {
-    for (const layer of [this.target, this.route]) {
+    for (const layer of [this.target, this.route, this.rttLayer, this.traceLayer]) {
       if (!layer) continue; // 없는 레이어
       if (show) layer.addTo(this.map); // 다시 표시
       else layer.remove(); // 숨김
@@ -161,6 +228,7 @@ export class GeoMap {
   }
 
   clearTarget() {
+    this.clearProbe(); // 원·경로도 함께 제거
     if (this.target) this.target.remove(); // 대상 마커 제거
     if (this.route) this.route.remove(); // 연결선 제거
     this.target = null; // 비움

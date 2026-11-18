@@ -121,3 +121,32 @@ def test_main_loop_dispatches_commands(service, capsys, monkeypatch):
     out = capsys.readouterr().out  # 화면 출력
     assert "Domain: N/A (My Public IP)" in out and "Domain: example.com" in out  # 두 조회 결과
     assert "[기록] 전체 1건" in out and out.rstrip().endswith("프로그램을 종료합니다.")  # 기록 화면과 종료 문구
+
+
+# --- 지연 측정 ('l') ---
+
+def _probe(service, database):
+    """가짜 측정을 끼운 지연 측정 서비스."""
+    from getip.models import LatencyResult  # 데이터 클래스
+    from getip.services.origin import OriginService  # 내 위치
+    from getip.services.probe import ProbeService  # 측정 서비스
+    from getip.storage.settings import SettingsStore  # 설정 저장소
+
+    measure = lambda ip: [LatencyResult("tcp:443", [24.0], 4, 24.0, 0.0), LatencyResult("icmp", [], 4, None, 1.0)]  # TCP만 응답
+    return ProbeService(service.history, service.geo, OriginService(service.my_ip, SettingsStore(database)), measure=measure)  # 서비스
+
+
+def test_latency_command_needs_lookup_first(service, database, capsys, monkeypatch):
+    _feed(monkeypatch, "l", "q")  # 조회 없이 지연 측정 → 종료
+    cli.main(service, _probe(service, database))  # 실행
+    assert "먼저 도메인이나 IP를 조회하세요" in capsys.readouterr().out  # 안내
+
+
+def test_latency_command_measures_last_lookup(service, database, capsys, monkeypatch):
+    _feed(monkeypatch, "8.8.8.8", "l", "q")  # 조회 → 지연 측정 → 종료
+    cli.main(service, _probe(service, database))  # 실행
+    out = capsys.readouterr().out  # 화면 출력
+    assert "TCP 443: 최소 24 ms (4회 중 1회 응답)" in out and "ICMP (ping): 응답 없음 (4회 시도)" in out  # 방법별 결과
+    assert "반경: 현실 추정" in out and "DB 위치까지: 0 km" in out and "기록 #1에 저장" in out  # 요약과 저장
+    lines = cli.format_result(service.history.get(1))  # 기록 다시 보기
+    assert lines["Latency 1"].startswith("TCP 443") and "Trace" not in lines  # 기록 상세에 지연 포함, 추적 없음

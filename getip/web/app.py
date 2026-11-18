@@ -3,21 +3,24 @@
 라우트 함수는 일반 def로 둔다. FastAPI가 스레드풀에서 실행하므로 DNS·위치 조회처럼 기다리는 작업이 서버를 막지 않는다.
 """
 
+import json  # 경로 추적 스트림의 줄 단위 JSON
 import mimetypes  # 정적 파일 형식 판별
 from pathlib import Path  # 경로 객체
 from typing import Optional  # 타입 표기
 from urllib.parse import quote  # 키를 주소에 안전하게 넣기
 
 from fastapi import FastAPI, HTTPException, Query  # 웹 프레임워크
-from fastapi.responses import HTMLResponse  # index.html 응답
+from fastapi.responses import HTMLResponse, StreamingResponse  # index.html 응답, 경로 추적 스트림
 from fastapi.staticfiles import StaticFiles  # 정적 파일 제공
 from pydantic import BaseModel, Field  # 요청 본문 검증
 
 from getip import config  # 타일 주소, 테마 목록
-from getip.geo.base import GeoLookupError  # 위치 조회 실패 예외
 from getip.net.target import InvalidTargetError  # 입력 형식 오류
+from getip.probe.traceroute import TracerouteUnavailableError, TracerouteUnsupportedError  # 추적 불가 사유
 from getip.services.connections import ConnectionService  # 프로그램 연결 조회
 from getip.services.lookup import LookupService  # 조회 서비스
+from getip.services.origin import OriginService  # 내 위치
+from getip.services.probe import ProbeService, RecordNotFoundError  # 지연 측정·경로 추적
 from getip.storage.settings import InvalidSettingError, SettingsStore  # 화면 설정
 from getip.system.connections import ConnectionsUnavailableError  # 연결 목록 읽기 실패
 from getip.web import serialize  # JSON 변환
@@ -48,6 +51,13 @@ class LookupRequest(BaseModel):
     ip: Optional[str] = Field(default=None, max_length=64)  # IP가 여러 개일 때 고른 것 (없으면 첫 번째)
 
 
+class LocationRequest(BaseModel):
+    """PUT /api/me/location 본문 (지도에서 클릭한 좌표)."""
+
+    lat: float  # 위도
+    lon: float  # 경도 (지도 사본을 클릭하면 ±180 밖일 수 있음 → 저장 시 정리)
+
+
 class SettingsUpdate(BaseModel):
     """PUT /api/settings 본문. 보낸 항목만 바꾼다."""
 
@@ -65,12 +75,14 @@ def _tile_urls(settings: SettingsStore) -> Optional[dict]:
 
 
 def create_app(service: LookupService, settings: SettingsStore, token: str,
-               connections: Optional[ConnectionService] = None) -> FastAPI:
+               connections: Optional[ConnectionService] = None, probe: Optional[ProbeService] = None) -> FastAPI:
     """서비스와 설정 저장소를 연결한 앱을 만든다. token은 실행마다 새로 만든 임의 문자열.
 
-    connections가 없으면 위치 조회 서비스의 캐시를 그대로 써서 기본 연결 서비스를 만든다.
+    connections·probe가 없으면 위치 조회 서비스의 캐시·기록을 그대로 써서 기본 구성을 만든다.
     """
     connections = connections or ConnectionService(service.geo)  # 같은 위치 캐시 공유
+    probe = probe or ProbeService(service.history, service.geo, OriginService(service.my_ip, settings))  # 측정 서비스
+    origins = probe.origins  # 내 위치 (측정과 같은 것을 써야 원 중심이 일치)
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)  # 문서 화면은 끔 (로컬 전용 앱)
     app.middleware("http")(make_guard(token))  # 모든 요청에 Host·Origin·토큰 검사
     index_template = (STATIC_DIR / "index.html").read_text(encoding="utf-8")  # 화면 틀 (실행 중 바뀌지 않음)
@@ -104,13 +116,59 @@ def create_app(service: LookupService, settings: SettingsStore, token: str,
             raise HTTPException(400, f"{parsed.host}의 IP 목록에 없는 주소입니다: {ip}")  # 거부
         return serialize.result_json(service.lookup(parsed, ip, ips))  # 조회 + 저장 결과
 
+    @app.post("/api/lookup/{record_id}/latency")
+    def latency_measure(record_id: int):
+        """기록의 IP로 지연을 재서 그 기록에 덧붙인다 (D12: 버튼을 눌렀을 때만)."""
+        try:
+            return serialize.result_json(probe.measure_latency(record_id))  # 측정 + 저장 결과
+        except RecordNotFoundError as exc:  # 없는 기록
+            raise HTTPException(404, str(exc)) from exc  # 404
+
+    @app.post("/api/lookup/{record_id}/trace")
+    def trace_start(record_id: int):
+        """경로 추적. 홉이 나올 때마다 JSON 한 줄씩 보낸다 (EventSource는 토큰 헤더를 못 보내 fetch 스트림 사용)."""
+        try:
+            session = probe.start_trace(record_id)  # 명령 실행 (실행 중인 다른 추적은 멈춤)
+        except RecordNotFoundError as exc:  # 없는 기록
+            raise HTTPException(404, str(exc)) from exc  # 404
+        except TracerouteUnsupportedError as exc:  # IPv6
+            raise HTTPException(400, str(exc)) from exc  # 400
+        except TracerouteUnavailableError as exc:  # 명령 없음
+            raise HTTPException(503, f"경로 추적 명령을 찾을 수 없습니다: {exc}") from exc  # 503
+
+        def lines():
+            events = session.events()  # 사건 생성기
+            try:
+                for event in events:  # 사건마다
+                    yield json.dumps(serialize.trace_event_json(event), ensure_ascii=False) + "\n"  # 한 줄
+            finally:
+                events.close()  # 화면이 끊겨도 프로세스 정리·저장이 바로 일어나게 함
+
+        return StreamingResponse(lines(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-store"})  # 줄 단위 JSON 스트림
+
+    @app.post("/api/trace/stop")
+    def trace_stop():
+        """실행 중인 경로 추적을 멈춘다 (그때까지의 홉은 기록에 저장됨)."""
+        return {"stopped": probe.stop_trace()}  # 멈춘 것이 있었는지
+
     @app.get("/api/me")
     def me():
-        """내 공인 IP와 위치."""
+        """내 공인 IP 정보와 지금 쓰는 내 위치(수동 지정 우선). 조회가 실패해도 200 + error."""
+        return serialize.me_json(origins.me())  # 공급자 직접 조회
+
+    @app.put("/api/me/location")
+    def me_location_set(body: LocationRequest):
+        """내 위치를 지도에서 고른 좌표로 지정 (D13)."""
         try:
-            return serialize.geo_json(service.my_ip())  # 공급자 직접 조회
-        except GeoLookupError as exc:  # 네트워크 오류, 한도 초과
-            raise HTTPException(502, str(exc)) from exc  # 외부 서비스 실패
+            return {"origin": serialize.origin_json(origins.set_manual(body.lat, body.lon))}  # 저장한 위치
+        except InvalidSettingError as exc:  # 범위 밖
+            raise HTTPException(400, str(exc)) from exc  # 400
+
+    @app.delete("/api/me/location")
+    def me_location_clear():
+        """수동 지정을 지우고 자동(ip-api) 위치로 되돌린다."""
+        return {"origin": serialize.origin_json(origins.clear_manual())}  # 자동 위치 (모르면 null)
 
     @app.get("/api/connections")
     def connections_list(include_private: bool = False, include_closing: bool = False):
@@ -158,6 +216,8 @@ def create_app(service: LookupService, settings: SettingsStore, token: str,
             "attribution": config.TILE_ATTRIBUTION,  # 출처 표기
             "storage_warning": service.storage_warning,  # 기록 저장소 문제 안내 (없으면 None)
             "connections_refresh_sec": config.CONN_REFRESH_SEC,  # 연결 목록 자동 새로고침 주기
+            "fiber_km_per_ms": config.FIBER_KM_PER_MS,  # 반경 원 설명용: 물리적 상한 계수
+            "realistic_km_per_ms": config.REALISTIC_KM_PER_MS,  # 반경 원 설명용: 현실 추정 계수
         }
 
     @app.put("/api/settings")

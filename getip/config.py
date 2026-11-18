@@ -18,6 +18,18 @@ REVERSE_DNS_TIMEOUT_SEC = 2  # 역방향 DNS 조회를 기다리는 최대 시�
 TRACE_MAX_HOPS = 30  # 경로 추적 최대 홉 수 (tracert/traceroute 기본값과 동일)
 TRACE_WAIT_MS_WINDOWS = 1000  # Windows tracert의 홉당 응답 대기 시간(ms)
 TRACE_WAIT_SEC_UNIX = 3  # Unix traceroute의 홉당 응답 대기 시간(초)
+TRACE_MAX_SILENT_HOPS = 5  # 응답 없는 홉이 이만큼 연속되면 추적을 멈춤 (ICMP를 막은 대상에서 끝까지 기다리지 않게)
+
+LATENCY_SAMPLES = 4  # 지연 측정 방법마다 보내는 횟수
+LATENCY_TCP_PORTS = (443, 80)  # TCP 연결 시간을 잴 포트 (앞의 포트가 응답하지 않으면 다음 포트)
+LATENCY_TCP_TIMEOUT_SEC = 1.5  # TCP 연결 한 번을 기다리는 최대 시간(초)
+LATENCY_PING_WAIT_MS = 1000  # ping 한 번의 응답 대기 시간(ms)
+
+FIBER_KM_PER_MS = 100  # RTT 1ms당 최대 거리(km): 광섬유 속 빛은 1ms에 약 200km, 왕복이므로 절반 → 물리적 상한
+REALISTIC_KM_PER_MS = 65  # RTT 1ms당 현실적 최대 거리(km): 실측(2026-11-19, 서울→비CDN 서버 6곳 25~62km/ms)의 최댓값에 여유를 둠. 이 원 밖이면 가능성 낮음
+EARTH_HALF_CIRCUMFERENCE_KM = 20015  # 지구 둘레의 절반(평균 반지름 기준): 어떤 두 지점도 이보다 멀 수 없음
+
+MY_LOCATION_CACHE_SEC = 600  # 반경 원 중심으로 쓰는 '내 위치(ip-api)'를 다시 조회하지 않고 재사용하는 시간(초)
 
 HISTORY_PAGE_SIZE = 20  # CLI 기록 목록에 한 번에 보여줄 건수
 
