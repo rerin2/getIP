@@ -20,6 +20,20 @@ function tooltipContent(title, subtitle) {
   return box; // 완성된 요소
 }
 
+// 선을 이을 때 경도를 ±180° 밖으로 이어 붙이므로(태평양을 건너는 선) 그 부분은 옆 '지도 사본'에 놓인다.
+// worldCopyJump가 화면을 원래 세계로 되돌리면 그 부분이 사라지므로, 왼쪽·가운데·오른쪽 세 사본에 모두 그린다.
+const WORLD_SHIFTS = [-360, 0, 360]; // 경도 이동량
+
+// 좌표 [위도, 경도]를 경도 방향으로 dx만큼 옮김
+function shift([lat, lon], dx) {
+  return [lat, lon + dx]; // 새 좌표
+}
+
+// make(dx)로 만든 레이어를 세 사본만큼 모아 한 묶음으로 돌려준다
+function inEveryWorld(make) {
+  return L.layerGroup(WORLD_SHIFTS.map((dx) => make(dx))); // 묶음 (함께 추가·제거)
+}
+
 // 위치 문자열 "도시, 국가"
 function placeText(geo) {
   return [geo.city, geo.country].filter(Boolean).join(', '); // 빈 값 제외
@@ -105,11 +119,11 @@ export class GeoMap {
     if (!geo || geo.lat == null || geo.lon == null) return false; // 표시할 좌표 없음
     let latlng = [geo.lat, geo.lon]; // 대상 좌표
     if (this.meLatLng) latlng = [geo.lat, nearLon(this.meLatLng[1], geo.lon)]; // 내 위치 쪽 지도 사본으로 옮김
-    this.target = L.circleMarker(latlng, { radius: 9, className: 'mk-target' }) // 빨간 원
-      .bindTooltip(tooltipContent(`${result.target.host} (${result.ip})`, placeText(geo)), { direction: 'top' }) // 정보
-      .addTo(this.map); // 지도에 추가
+    const tip = tooltipContent(`${result.target.host} (${result.ip})`, placeText(geo)); // 툴팁 내용
+    this.target = inEveryWorld((dx) => L.circleMarker(shift(latlng, dx), { radius: 9, className: 'mk-target' }) // 빨간 원
+      .bindTooltip(tip.cloneNode(true), { direction: 'top' })).addTo(this.map); // 사본마다 (경도를 옮겼으면 원래 세계에도 보이게)
     if (this.meLatLng) {
-      this.route = L.polyline([this.meLatLng, latlng], { className: 'mk-route', interactive: false }).addTo(this.map); // 점선
+      this.route = inEveryWorld((dx) => L.polyline([shift(this.meLatLng, dx), shift(latlng, dx)], { className: 'mk-route', interactive: false })).addTo(this.map); // 점선
       this.map.fitBounds(L.latLngBounds([this.meLatLng, latlng]), { padding: [60, 60], maxZoom: 8 }); // 둘 다 보이게
     } else {
       this.map.setView(latlng, TARGET_ZOOM); // 대상으로 이동
@@ -134,7 +148,7 @@ export class GeoMap {
     for (const [className, km] of rings) {
       const points = geodesicRing(origin.lat, origin.lon, km); // 둘레 좌표
       if (!points) continue; // 지구 대부분을 덮으면 생략
-      L.polygon(points, { className, interactive: false }).addTo(this.rttLayer); // 다각형 (클릭 통과)
+      inEveryWorld((dx) => L.polygon(points.map((p) => shift(p, dx)), { className, interactive: false })).addTo(this.rttLayer); // 다각형 (클릭 통과, 날짜변경선을 넘어도 끊기지 않게)
     }
   }
 
@@ -152,11 +166,13 @@ export class GeoMap {
       prevLon = lon; // 다음 기준
       points.push([geo.lat, lon]); // 선에 추가
       const rtt = hop.rtt_ms == null ? '-' : `${hop.rtt_less_than ? '<' : ''}${hop.rtt_ms}ms`; // 지연 글자
-      L.circleMarker([geo.lat, lon], { radius: 4, className: 'mk-hop' }) // 작은 원
-        .bindTooltip(tooltipContent(`${hop.index}. ${hop.ip}`, [rtt, placeText(geo), geo.isp].join('\n')), { direction: 'top' }) // 지연·위치·사업자
-        .addTo(this.traceLayer); // 묶음에 추가
+      const tip = tooltipContent(`${hop.index}. ${hop.ip}`, [rtt, placeText(geo), geo.isp].join('\n')); // 지연·위치·사업자
+      inEveryWorld((dx) => L.circleMarker([geo.lat, lon + dx], { radius: 4, className: 'mk-hop' }) // 작은 원
+        .bindTooltip(tip.cloneNode(true), { direction: 'top' })).addTo(this.traceLayer); // 사본마다 추가
     }
-    if (points.length > 1) L.polyline(points, { className: 'mk-trace', interactive: false }).addTo(this.traceLayer); // 경로선
+    if (points.length > 1) {
+      inEveryWorld((dx) => L.polyline(points.map((p) => shift(p, dx)), { className: 'mk-trace', interactive: false })).addTo(this.traceLayer); // 경로선 (한국→미국→영국처럼 경도가 180°를 넘어도 끊기지 않게)
+    }
   }
 
   clearProbe() {
